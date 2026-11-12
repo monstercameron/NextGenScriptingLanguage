@@ -1234,6 +1234,25 @@ happy-path timings are reported separately from correctness improvements.
 The [paired Omarchy harness](../benchmarks/omarchy_success.py) reuses its
 owned Bash-differential fixtures and has no result until the final-build gate.
 
+## Canonical forms
+
+Where two spellings do the same job, this table names the one to write. Nothing
+here is removed: the alternative still checks, and `check` does not yet warn
+about it. Each reason was verified against the shipped manifests in `manifests/`
+and the bundled index. The test `tests/issue_498_canonical_forms.rs` reads this
+table and fails if a `run NAME` applet named in it is not in the bundled index.
+
+| Operation | Canonical | Alternative | Reason |
+| --- | --- | --- | --- |
+| Uppercase text | `run text.upper with text X` | `run upper` | `text.upper` runs in process with Unicode uppercase mappings; `upper` (`manifests/upper.json`) launches `tr [:lower:] [:upper:]`. |
+| Count lines of stdin | `run count.lines` | `run wc with flags ["-l"]`, or the phrase `count lines` | `count.lines` (`manifests/count.lines.json`) is the fixed wrapper of `wc -l` and takes no flags to get wrong; `wc` takes free flags. |
+| Read a file | `read "path"` statement | `run fs.read with path P` | The statement reads without starting a process (`docs/language.md`). `fs.read` (`manifests/core.fs_read.json`) also returns a hash, snapshot, symlink target and mode, so use it only for those. |
+| Change working directory | `use folder "path"` | `run cd with path "path"` | `use folder` scopes the change to the statements that follow (`docs/language.md`); `run "cd"` would try an external executable. |
+| Remove a suffix from a path | `run path.remove_suffix with path P and suffix S` | `run text.strip_suffix with text P and suffix S` | Both remove one exact suffix (`manifests/core.path_remove_suffix.json`, `manifests/core.text_strip_suffix.json`); the path form names path strings. |
+| Run a native tool that has a shipped manifest | `run sort with flags ["-u"]` | `run "sort" with arguments ["-u"]` | The named manifest types its parameters and declares effects (`manifests/sort.json`: filesystem read and write). Some manifests, such as `jq`, also insert `--`. Quoted direct calls are for tools without a manifest, such as `test` or `curl`. |
+| Parse a color | `run color.parse_rgb with default_hex H and text T` | `run color.parse_rgb.result with default_hex H and text T` | The base form returns the fallback and is the one to write when a default is acceptable. Use `.result`, which returns a structured failure record, only when the program must branch on a failed parse. |
+| Parse an integer | `run number.parse_integer with text T` | `run number.parse_integer.result with text T` | The base form returns the value and is the one to write by default. Use `.result`, which returns a typed success or failure record, only when the program must branch on a failed parse. |
+
 ## Authoring an applet: a worked example
 
 This section walks through one complete applet, from manifest to tested call.

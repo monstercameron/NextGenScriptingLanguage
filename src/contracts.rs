@@ -2696,6 +2696,13 @@ pub struct AppletContract {
         skip_serializing_if = "Option::is_none"
     )]
     pub ports: Option<AppletPorts>,
+    /// Marks a spelling that a canonical form supersedes. Nothing rejects a
+    /// deprecated applet yet; the flag is recorded for `check` hints.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deprecated: bool,
+    /// The canonical applet name that replaces this one, when `deprecated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -3565,5 +3572,55 @@ mod numeric_minimum_tests {
         );
         assert!(larger_exact_number_minimum.is_assignable_to(&smaller_exact_number_minimum));
         assert!(!smaller_exact_number_minimum.is_assignable_to(&larger_exact_number_minimum));
+    }
+}
+
+#[cfg(test)]
+mod deprecation_field_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deprecation_fields_default_to_absent() {
+        let contract: AppletContract = serde_json::from_value(json!({"version": 1})).unwrap();
+        assert!(!contract.deprecated);
+        assert_eq!(contract.replaced_by, None);
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert!(serialized.get("deprecated").is_none());
+        assert!(serialized.get("replaced_by").is_none());
+    }
+
+    #[test]
+    fn deprecation_fields_parse_when_present() {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "deprecated": true,
+            "replaced_by": "text.upper"
+        }))
+        .unwrap();
+        assert!(contract.deprecated);
+        assert_eq!(contract.replaced_by.as_deref(), Some("text.upper"));
+    }
+
+    #[test]
+    fn replaced_by_names_an_applet_and_survives_a_round_trip() {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "deprecated": true,
+            "replaced_by": "color.parse_rgb"
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert_eq!(serialized["deprecated"], json!(true));
+        assert_eq!(serialized["replaced_by"], json!("color.parse_rgb"));
+        let reparsed: AppletContract = serde_json::from_value(serialized).unwrap();
+        assert_eq!(reparsed, contract);
+    }
+
+    #[test]
+    fn deprecated_must_be_a_boolean() {
+        let result: Result<AppletContract, _> =
+            serde_json::from_value(json!({"version": 1, "deprecated": "yes"}));
+        assert!(result.is_err());
     }
 }

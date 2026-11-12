@@ -98,6 +98,8 @@ fn remote_manifest(
         capabilities: vec!["network.connect".into()],
         effects: Vec::new(),
         result_envelope: false,
+        deprecated: false,
+        replaced_by: None,
         ports: Some(AppletPorts {
             inputs: BTreeMap::from([("message".into(), text_port(input_sensitivity))]),
             outputs: BTreeMap::from([("value".into(), text_port(input_sensitivity))]),

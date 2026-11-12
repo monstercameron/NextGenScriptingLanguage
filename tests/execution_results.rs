@@ -649,6 +649,8 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
         effects: Vec::new(),
         result_envelope: false,
         ports: Some(ports),
+        deprecated: false,
+        replaced_by: None,
     };
     let mut advertised_contract = contract.clone();
     advertised_contract.remote = None;

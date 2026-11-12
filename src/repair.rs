@@ -22,27 +22,38 @@ pub const PROTOCOL: &str = "execute.repair/1";
 pub const REPAIRS_FILE: &str = "repairs.jsonl";
 pub const REPAIR_COPIES_DIR: &str = "repairs";
 
-/// The closed set of repairs. Each names a 1-based physical line of the program.
+/// Where a repair applies: a 1-based physical line, or a step id or label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Line(usize),
+    /// A step id (for example `Invoke:3a1c...#1`) or a `fetch:` label. It is resolved
+    /// through the parser's step ids, so it keeps naming the same step when earlier
+    /// edits move its line. A token that is all digits is always a line.
+    Step(String),
+}
+
+/// The closed set of repairs. Each names its target: a physical line or a step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
-    /// Replace the value of an existing parameter on one statement line.
+    /// Replace the value of an existing parameter on one statement.
     SetParameter {
-        line: usize,
+        target: Target,
         name: String,
         value: String,
     },
     /// Replace the statement on one line, keeping its indentation.
-    ReplaceCommand { line: usize, statement: String },
+    ReplaceCommand { target: Target, statement: String },
     /// Insert a statement before a line, at that line's indentation.
-    InsertBefore { line: usize, statement: String },
+    InsertBefore { target: Target, statement: String },
     /// Remove one single-line statement.
-    Remove { line: usize },
+    Remove { target: Target },
     /// Add a retry policy to a compatible invocation.
-    AddRetry { line: usize, count: u32 },
+    AddRetry { target: Target, count: u32 },
 }
 
 impl Operation {
-    /// Parse the operation text, for example `set-parameter 3 message "x"`.
+    /// Parse the operation text, for example `set-parameter 3 message "x"` or
+    /// `set-parameter fetch message "x"`.
     pub fn parse(text: &str) -> Result<Self> {
         let text = text.trim();
         let (verb, rest) = text
@@ -51,7 +62,7 @@ impl Operation {
             .unwrap_or((text, ""));
         match verb {
             "set-parameter" => {
-                let (line, rest) = split_line(rest, verb)?;
+                let (target, rest) = split_target(rest, verb)?;
                 let (name, value) = rest
                     .split_once(char::is_whitespace)
                     .map(|(name, value)| (name, value.trim()))
@@ -60,46 +71,46 @@ impl Operation {
                     bail!("set-parameter expects LINE NAME VALUE");
                 }
                 Ok(Self::SetParameter {
-                    line,
+                    target,
                     name: name.to_owned(),
                     value: value.to_owned(),
                 })
             }
             "replace-command" => {
-                let (line, statement) = split_line(rest, verb)?;
+                let (target, statement) = split_target(rest, verb)?;
                 if statement.is_empty() {
                     bail!("replace-command expects LINE STATEMENT");
                 }
                 Ok(Self::ReplaceCommand {
-                    line,
+                    target,
                     statement: statement.to_owned(),
                 })
             }
             "insert-before" => {
-                let (line, statement) = split_line(rest, verb)?;
+                let (target, statement) = split_target(rest, verb)?;
                 if statement.is_empty() {
                     bail!("insert-before expects LINE STATEMENT");
                 }
                 Ok(Self::InsertBefore {
-                    line,
+                    target,
                     statement: statement.to_owned(),
                 })
             }
             "remove" => {
-                let (line, extra) = split_line(rest, verb)?;
+                let (target, extra) = split_target(rest, verb)?;
                 if !extra.is_empty() {
                     bail!("remove expects only LINE");
                 }
-                Ok(Self::Remove { line })
+                Ok(Self::Remove { target })
             }
             "add-retry" => {
-                let (line, count) = split_line(rest, verb)?;
+                let (target, count) = split_target(rest, verb)?;
                 let count = count
                     .parse::<u32>()
                     .ok()
                     .filter(|count| *count >= 1)
                     .ok_or_else(|| anyhow!("add-retry expects LINE N with N at least 1"))?;
-                Ok(Self::AddRetry { line, count })
+                Ok(Self::AddRetry { target, count })
             }
             "" => bail!(
                 "a repair operation is required: set-parameter, replace-command, insert-before, remove or add-retry"
@@ -110,13 +121,13 @@ impl Operation {
         }
     }
 
-    fn line(&self) -> usize {
+    fn target(&self) -> &Target {
         match self {
-            Self::SetParameter { line, .. }
-            | Self::ReplaceCommand { line, .. }
-            | Self::InsertBefore { line, .. }
-            | Self::Remove { line }
-            | Self::AddRetry { line, .. } => *line,
+            Self::SetParameter { target, .. }
+            | Self::ReplaceCommand { target, .. }
+            | Self::InsertBefore { target, .. }
+            | Self::Remove { target }
+            | Self::AddRetry { target, .. } => target,
         }
     }
 
@@ -131,23 +142,57 @@ impl Operation {
     }
 }
 
-fn split_line<'a>(rest: &'a str, verb: &str) -> Result<(usize, &'a str)> {
-    let (line, tail) = rest
+fn split_target<'a>(rest: &'a str, verb: &str) -> Result<(Target, &'a str)> {
+    let (token, tail) = rest
         .split_once(char::is_whitespace)
-        .map(|(line, tail)| (line, tail.trim()))
+        .map(|(token, tail)| (token, tail.trim()))
         .unwrap_or((rest, ""));
-    let line = line
-        .parse::<usize>()
-        .ok()
-        .filter(|line| *line >= 1)
-        .ok_or_else(|| anyhow!("{verb} expects a line number from 1"))?;
-    Ok((line, tail))
+    if token.is_empty() {
+        bail!("{verb} expects a line number from 1 or a step id or label");
+    }
+    if token.bytes().all(|byte| byte.is_ascii_digit()) {
+        let line = token
+            .parse::<usize>()
+            .ok()
+            .filter(|line| *line >= 1)
+            .ok_or_else(|| anyhow!("{verb} expects a line number from 1"))?;
+        return Ok((Target::Line(line), tail));
+    }
+    Ok((Target::Step(token.to_owned()), tail))
+}
+
+/// The 1-based physical line a target names. A step id or label is looked up among
+/// the program's parsed steps, so it resolves to the step's current line.
+fn resolve_target(
+    source: &str,
+    path: Option<&Path>,
+    target: &Target,
+    registry: &Registry,
+) -> Result<usize> {
+    let id = match target {
+        Target::Line(line) => return Ok(*line),
+        Target::Step(id) => id,
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let access = crate::program_files::Access {
+        registry,
+        cwd: &cwd,
+    };
+    let program = crate::program_files::parse_at(source, path, Some(access))
+        .map_err(|error| anyhow!("{error:#}"))?;
+    let position = crate::ast::step_ids(&program.steps)
+        .iter()
+        .position(|candidate| candidate == id)
+        .ok_or_else(|| anyhow!("no step has the id or label {id:?}"))?;
+    Ok(program.steps[position].line)
 }
 
 /// A repair that has been applied to text and checked, but not yet written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub operation: Operation,
+    /// The physical line the operation applied to, after resolving a step target.
+    pub line: usize,
     pub before: String,
     pub after: String,
     /// The first unexecuted top-level statement's line. Earlier lines are untouched.
@@ -173,7 +218,7 @@ pub fn apply_at(
     boundary_line: usize,
     registry: &Registry,
 ) -> Result<Plan> {
-    let line = operation.line();
+    let line = resolve_target(source, path, operation.target(), registry)?;
     if line < boundary_line {
         bail!(
             "line {line} is in completed steps; a repair may change only line {boundary_line} onward"
@@ -273,6 +318,7 @@ pub fn apply_at(
     let diff = line_diff(source, &after);
     Ok(Plan {
         operation: operation.clone(),
+        line,
         before: source.to_owned(),
         after,
         boundary_line,
@@ -734,7 +780,7 @@ pub fn commit(
             .unwrap_or(0),
         operation: operation_text,
         kind: plan.operation.kind(),
-        line: plan.operation.line(),
+        line: plan.line,
         boundary_line: plan.boundary_line,
         program_path: program_path.display().to_string(),
         before_sha256: before_sha,
@@ -1157,7 +1203,7 @@ mod tests {
         assert_eq!(
             Operation::parse("set-parameter 3 count 4").unwrap(),
             Operation::SetParameter {
-                line: 3,
+                target: Target::Line(3),
                 name: "count".into(),
                 value: "4".into()
             }
@@ -1165,18 +1211,110 @@ mod tests {
         assert_eq!(
             Operation::parse("replace-command 2 run \"true\"").unwrap(),
             Operation::ReplaceCommand {
-                line: 2,
+                target: Target::Line(2),
                 statement: "run \"true\"".into()
             }
         );
         assert_eq!(
             Operation::parse("remove 5").unwrap(),
-            Operation::Remove { line: 5 }
+            Operation::Remove {
+                target: Target::Line(5)
+            }
+        );
+        assert_eq!(
+            Operation::parse("remove fetch").unwrap(),
+            Operation::Remove {
+                target: Target::Step("fetch".into())
+            }
+        );
+        assert_eq!(
+            Operation::parse("remove Invoke:3a1c9f0e2b4d#1").unwrap(),
+            Operation::Remove {
+                target: Target::Step("Invoke:3a1c9f0e2b4d#1".into())
+            }
         );
         assert!(Operation::parse("delete 5").is_err());
         assert!(Operation::parse("remove 0").is_err());
         assert!(Operation::parse("add-retry 2 0").is_err());
         assert!(Operation::parse("").is_err());
+    }
+
+    #[test]
+    fn a_step_label_addresses_its_step_wherever_it_moves() {
+        let source = "run \"true\"\nfetch: run \"false\"\nrun \"true\"\n";
+        let plan = apply(
+            source,
+            &Operation::parse("remove fetch").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.line, 2);
+        assert_eq!(plan.after, "run \"true\"\nrun \"true\"\n");
+
+        // An earlier insert moves the labelled step to line 3; the label still names it.
+        let inserted = apply(
+            source,
+            &Operation::parse("insert-before 1 run \"true\"").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap()
+        .after;
+        let plan = apply(
+            &inserted,
+            &Operation::parse("remove fetch").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.line, 3);
+        assert_eq!(plan.after, "run \"true\"\nrun \"true\"\nrun \"true\"\n");
+    }
+
+    #[test]
+    fn a_derived_step_id_addresses_its_statement() {
+        let source = "run \"true\"\nrun \"false\"\n";
+        let program = parser::parse(source).unwrap();
+        let ids = crate::ast::step_ids(&program.steps);
+        let plan = apply(
+            source,
+            &Operation::parse(&format!("remove {}", ids[1])).unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.line, 2);
+        assert_eq!(plan.after, "run \"true\"\n");
+    }
+
+    #[test]
+    fn a_step_target_in_completed_steps_or_unknown_is_refused() {
+        let source = "fetch: run \"true\"\nrun \"false\"\n";
+        let error = apply(
+            source,
+            &Operation::parse("remove fetch").unwrap(),
+            2,
+            &Registry::default(),
+        )
+        .expect_err("a labelled step in the completed prefix must be refused");
+        assert!(
+            format!("{error:#}").contains("completed steps"),
+            "{error:#}"
+        );
+
+        let error = apply(
+            source,
+            &Operation::parse("remove nowhere").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .expect_err("an unknown label must be refused");
+        assert!(
+            format!("{error:#}").contains("no step has the id or label"),
+            "{error:#}"
+        );
+        assert!(Operation::parse("remove 0").is_err());
     }
 
     #[test]
@@ -2181,16 +2319,22 @@ mod tests {
         let retry = facts(true, true, false);
         assert_eq!(
             retry_operation(retry, 4, 2).unwrap(),
-            Operation::AddRetry { line: 4, count: 2 }
+            Operation::AddRetry {
+                target: Target::Line(4),
+                count: 2
+            }
         );
         assert_eq!(
             retry_operation(retry, 4, 0).unwrap(),
-            Operation::AddRetry { line: 4, count: 1 }
+            Operation::AddRetry {
+                target: Target::Line(4),
+                count: 1
+            }
         );
         assert_eq!(
             retry_operation(retry, 4, 99).unwrap(),
             Operation::AddRetry {
-                line: 4,
+                target: Target::Line(4),
                 count: SUGGESTED_RETRY_LIMIT
             }
         );

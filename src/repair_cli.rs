@@ -12,7 +12,8 @@ const USAGE: &str =
     "usage: execute repair CHECKPOINT --op '<operation>' [--dry-run] [--manifest-dir DIR]\n\
     usage: execute repair --from-record DIR --program FILE --op '<operation>' [--dry-run] [--manifest-dir DIR]\n\
     operations: set-parameter LINE NAME VALUE | replace-command LINE STATEMENT | \
-    insert-before LINE STATEMENT | remove LINE | add-retry LINE N";
+    insert-before LINE STATEMENT | remove LINE | add-retry LINE N \
+    (LINE is a physical line, or a step id or label such as fetch)";
 
 pub fn repair(arguments: &[String]) -> Result<()> {
     let mut directory = None;
@@ -300,6 +301,25 @@ mod tests {
         )
         .unwrap();
         assert!(plan.after.contains("run \"true\"\n"));
+    }
+
+    #[test]
+    fn repair_plan_accepts_a_step_label_as_its_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.program");
+        let source = "run \"true\"\nfetch: run \"false\"\nrun \"true\"\n";
+        fs::write(&path, source).unwrap();
+        // One completed step: the boundary is the labelled step's line, so it may change.
+        let plan = plan_repair(
+            source,
+            &path,
+            1,
+            &Operation::parse("remove fetch").unwrap(),
+            &flow::manifest::Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.line, 2);
+        assert_eq!(plan.after, "run \"true\"\nrun \"true\"\n");
     }
 
     #[test]

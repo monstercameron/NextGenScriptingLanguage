@@ -904,6 +904,128 @@ pub fn display_key(key: &str, base: Option<&Path>) -> String {
     format!("{PROGRAM_FILE_PREFIX}{}", parts.join("/"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// One result of scanning a directory for `.program` files.
+#[derive(Debug)]
+pub enum ProgramScanEntry {
+    /// A program that parsed. `interface` is the object `execute help --json` prints
+    /// for it (`agent::help::describe`): each input's name, type and whether it is required.
+    Interface {
+        path: PathBuf,
+        interface: serde_json::Value,
+    },
+    /// A program that could not be read, parsed or checked, with its error.
+    Failed { path: PathBuf, error: String },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProgramScanEntry {
+    /// The program file, or the directory that could not be read.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Interface { path, .. } | Self::Failed { path, .. } => path,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Scan `dir` for files named `*.program` and describe each one that parses, sorted by path.
+///
+/// Subdirectories are entered only when `recursive` is set. Symbolic links are never
+/// followed: a linked directory is skipped and a linked file is not read. A file that
+/// does not parse, or a subdirectory that cannot be read, becomes a `Failed` entry and
+/// the scan goes on. Only the root directory itself can make the scan fail.
+pub fn scan_program_directory(
+    dir: &Path,
+    recursive: bool,
+    access: Access<'_>,
+) -> Result<Vec<ProgramScanEntry>> {
+    let root = fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+    if root.file_type().is_symlink() {
+        bail!(
+            "{} is a symbolic link; program directories are not followed through links",
+            dir.display()
+        );
+    }
+    let mut results = Vec::new();
+    let mut directories = Vec::new();
+    let listing = read_listing(dir).with_context(|| format!("reading {}", dir.display()))?;
+    visit_listing(listing, recursive, access, &mut results, &mut directories);
+    while let Some(current) = directories.pop() {
+        match read_listing(&current) {
+            Ok(listing) => {
+                visit_listing(listing, recursive, access, &mut results, &mut directories)
+            }
+            Err(error) => results.push(ProgramScanEntry::Failed {
+                path: current,
+                error: format!("{error:#}"),
+            }),
+        }
+    }
+    results.sort_by(|left, right| left.path().cmp(right.path()));
+    Ok(results)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The entries of one directory, sorted by path so the scan order is stable.
+fn read_listing(dir: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    Ok(entries)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn visit_listing(
+    listing: Vec<fs::DirEntry>,
+    recursive: bool,
+    access: Access<'_>,
+    results: &mut Vec<ProgramScanEntry>,
+    directories: &mut Vec<PathBuf>,
+) {
+    for entry in listing {
+        let path = entry.path();
+        let kind = match entry.file_type() {
+            Ok(kind) => kind,
+            Err(error) => {
+                results.push(ProgramScanEntry::Failed {
+                    path,
+                    error: format!("{error:#}"),
+                });
+                continue;
+            }
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if recursive {
+                directories.push(path);
+            }
+        } else if kind.is_file() && path.extension().is_some_and(|ext| ext == "program") {
+            results.push(match program_interface(&path, access) {
+                Ok(interface) => ProgramScanEntry::Interface { path, interface },
+                Err(error) => ProgramScanEntry::Failed {
+                    path,
+                    error: format!("{error:#}"),
+                },
+            });
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The `execute help` interface of one program file: the same parse, the same static
+/// check without manifests, and the same description the help subcommand prints.
+fn program_interface(path: &Path, access: Access<'_>) -> Result<serde_json::Value> {
+    let program = parse_file(path, Some(access))?;
+    let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    crate::agent::errors::static_gate_without_manifests(&source, path, &program, access.registry)?;
+    Ok(crate::agent::help::describe(
+        &program,
+        &path.to_string_lossy(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,13 @@ original version labels.
 
 ## Unreleased
 
+- Added [docs/stability.md](docs/stability.md), the stability and deprecation
+  policy: which language markers, protocols, schemas, journal and record
+  versions are versioned, which values are stated stable, and what is still
+  undecided before 1.0. Linked from the README and `docs/language.md`. A
+  regression test (`tests/issue_420_stability_policy.rs`) checks the link and
+  that every published schema file is named and carries a matching `$id`.
+
 - Windows file publishes now ask the OS to persist the rename: both the
   POSIX-semantics rename path and the `MoveFileEx` write-through fallback end
   with a flush of the published parent directory, and the checkpoint, `then

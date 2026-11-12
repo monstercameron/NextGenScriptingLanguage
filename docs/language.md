@@ -120,7 +120,9 @@ native command stages.
 A program may begin with `execute 1`, which declares the language version it was
 written for. The marker must be the first statement, with no indentation. The interpreter accepts only version 1. Another number fails with
 `upgrade execute or remove the marker`. A program without the marker is version 1. `execute inspect` and
-`execute explain --json` report the version as `language_version`.
+`execute explain --json` report the version as `language_version`. Which
+language, output and protocol versions are compatibility promises is described in
+[stability.md](stability.md).
 
 ### Native exit status
 

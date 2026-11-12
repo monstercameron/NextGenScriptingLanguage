@@ -552,6 +552,9 @@ architecture, contribution paths and a separate map of historical evidence.
 For an Omarchy desktop, the [Omarchy quickstart](docs/omarchy-quickstart.md) covers a
 source build, a Hyprland toggle, a test with a fake `hyprctl`, and a user service.
 
+Which interfaces are versioned or stated stable, and how changes are announced
+before 1.0, is in the **[stability and deprecation policy](docs/stability.md)**.
+
 Licensed under the [MIT License](LICENSE).
 
 Security boundaries and remaining isolation gaps are documented in [SECURITY.md](SECURITY.md).

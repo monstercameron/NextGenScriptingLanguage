@@ -3783,10 +3783,10 @@ pub fn authorize_network_endpoint(
     } else {
         BTreeSet::new()
     };
-    let allow_loopback = contract
-        .remote
-        .as_ref()
-        .is_some_and(|remote| remote.allow_loopback_http_fixture);
+    // An active policy is the only authority over private destinations: the
+    // manifest's allow_loopback_http_fixture flag never authorizes loopback
+    // here. A loopback origin passes only through the explicit grant above.
+    let allow_loopback = false;
     if let Err(denied) =
         ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
     {

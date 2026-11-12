@@ -248,7 +248,9 @@ refused by name; at connect time the resolver pins the whole resolved address
 set, so a hostname that first resolves to a public address cannot rebind to a
 private one. Only an origin explicitly listed in `network_origins` preserves a
 private destination, for remote applets and for custom model endpoints; a
-broad empty-list grant does not. The model helper additionally accepts the
+broad empty-list grant does not. Under an active capability policy, a remote
+applet's `allow_loopback_http_fixture` manifest flag does not authorize
+loopback either; only a listed origin does. The model helper additionally accepts the
 listed origin through `EXECUTE_MODEL_GRANTED_ORIGIN`, conveyed by the runtime
 parent after it authorizes the endpoint, and honors only the value that equals
 the endpoint's own canonical origin. A script-controlled `--endpoint`

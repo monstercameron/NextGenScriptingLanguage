@@ -171,7 +171,6 @@ enum FailureClass {
     Input,
     Fixture,
     FixtureMismatch,
-    FixtureMissing,
     CredentialsMissing,
     Transport,
     HttpStatus(u16),
@@ -194,7 +193,6 @@ impl fmt::Display for ModelFailure {
             FailureClass::Input => "input",
             FailureClass::Fixture => "fixture",
             FailureClass::FixtureMismatch => "fixture_mismatch",
-            FailureClass::FixtureMissing => "fixture_missing",
             FailureClass::CredentialsMissing => "credentials_missing",
             FailureClass::Transport => "transport",
             FailureClass::HttpStatus(_) => "http_status",
@@ -218,6 +216,22 @@ fn failure(class: FailureClass) -> anyhow::Error {
     ModelFailure(class).into()
 }
 
+/// A fixture-directory miss. Its diagnostic is the static `fixture_missing`
+/// class; `field` names the first request field that differs from the nearest
+/// recorded fixture of the same kind, never that field's value.
+#[derive(Debug)]
+struct FixtureMiss {
+    field: Option<String>,
+}
+
+impl fmt::Display for FixtureMiss {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("fixture_missing")
+    }
+}
+
+impl StdError for FixtureMiss {}
+
 fn enforce_offline_mode(offline: bool, has_fixture: bool) -> Result<()> {
     if offline && !has_fixture {
         return Err(failure(FailureClass::Offline));
@@ -230,6 +244,9 @@ fn enforce_offline_mode(offline: bool, has_fixture: bool) -> Result<()> {
 pub fn diagnostic(error: &anyhow::Error) -> String {
     if let Some(exhausted) = error.downcast_ref::<BudgetExhausted>() {
         return exhausted.to_string();
+    }
+    if let Some(miss) = error.downcast_ref::<FixtureMiss>() {
+        return miss.to_string();
     }
     error
         .downcast_ref::<ModelFailure>()
@@ -295,9 +312,11 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
             {
-                // No fixture is recorded for this exact request. The message
-                // is the static class only; it never names the request.
-                failure(FailureClass::FixtureMissing)
+                // No fixture is recorded for this exact request. The diagnostic
+                // is the static class; the differing field name is kept apart.
+                anyhow::Error::from(FixtureMiss {
+                    field: nearest_fixture_difference(dir, &semantic),
+                })
             } else {
                 failure(FailureClass::Fixture)
             }
@@ -1273,6 +1292,64 @@ fn fixture_path_in_dir(dir: &str, request: &Value) -> Result<String> {
         .to_str()
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("fixture directory path is not UTF-8"))
+}
+
+/// The first top-level field that differs between a missed request and the
+/// closest recorded fixture of the same kind in `dir`. Closest means fewest
+/// differing fields; ties go to the earlier file name. Only the field name is
+/// returned, so a sensitive value is never echoed.
+fn nearest_fixture_difference(dir: &str, request: &Value) -> Option<String> {
+    let kind = request.get("kind")?;
+    let object = request.as_object()?;
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    paths.sort();
+    let mut best: Option<(usize, String)> = None;
+    for path in paths {
+        let Some(path) = path.to_str() else {
+            continue;
+        };
+        let Ok(mut file) = open_regular_no_follow(path) else {
+            continue;
+        };
+        let cap = DEFAULT_MAX_BYTES.saturating_mul(4).saturating_add(4096);
+        let Ok(bytes) = read_bounded(&mut file, cap, "reading fixture") else {
+            continue;
+        };
+        let Ok(Value::Object(fixture)) = parse_unique_json(&bytes) else {
+            continue;
+        };
+        let Some(recorded) = fixture.get("expected_request").and_then(Value::as_object) else {
+            continue;
+        };
+        if recorded.get("kind") != Some(kind) {
+            continue;
+        }
+        let keys: BTreeSet<&String> = object.keys().chain(recorded.keys()).collect();
+        let differing: Vec<&String> = keys
+            .into_iter()
+            .filter(|key| object.get(*key) != recorded.get(*key))
+            .collect();
+        let Some(first) = differing.first() else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(count, _)| differing.len() < *count)
+        {
+            best = Some((differing.len(), first.to_string()));
+        }
+    }
+    best.map(|(_, field)| field)
+}
+
+/// The request field that differs from the nearest recorded fixture when a
+/// fixture-directory call misses, or `None` when no comparable fixture exists.
+pub fn fixture_miss_field(error: &anyhow::Error) -> Option<&str> {
+    error.downcast_ref::<FixtureMiss>()?.field.as_deref()
 }
 
 /// Lint a fixture directory without contacting any provider. Returns the names
@@ -4118,6 +4195,40 @@ mod unit_tests {
         )
         .unwrap_err();
         assert_eq!(diagnostic(&error), "fixture_missing");
+    }
+
+    #[test]
+    fn fixture_miss_names_the_first_differing_field_without_its_value() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_string_lossy().into_owned();
+        let recorded_args: Vec<String> = [
+            "judge",
+            "--provider",
+            "jev",
+            "--model",
+            "jev-latest",
+            "--question",
+            "Is it true?",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let options = parse_args(&recorded_args).unwrap();
+        let expected = semantic_request(&options, json!("source text")).unwrap();
+        std::fs::write(
+            temp.path().join(format!("{}.json", request_hash(&expected).unwrap())),
+            json!({"expected_request": expected, "response": fixture_test_response("fixture result")})
+                .to_string(),
+        )
+        .unwrap();
+
+        let mut changed_args = recorded_args;
+        changed_args[6] = "Is it false?".to_owned();
+        changed_args.extend(["--fixture-dir".to_owned(), dir]);
+        let mut input: &[u8] = b"source text";
+        let error = run(&changed_args, &mut input, &mut Vec::new()).unwrap_err();
+        assert_eq!(diagnostic(&error), "fixture_missing");
+        assert_eq!(fixture_miss_field(&error), Some("question"));
     }
 
     fn run_level_argv(instruction: &str) -> Vec<std::ffi::OsString> {

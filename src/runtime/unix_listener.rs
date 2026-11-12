@@ -40,6 +40,31 @@ impl Drop for Nonblocking {
     }
 }
 
+/// Reaps every exited listener child without blocking and records a nonzero exit as the
+/// listener's failure. Called before each limit check so a producer that exits while a handler
+/// runs is seen before the listener reports success.
+fn reap_listener_children(
+    children: &mut Children,
+    source_manifest: Option<&Manifest>,
+    failure_status: &mut Option<std::process::ExitStatus>,
+) -> Result<()> {
+    for managed in &mut children.0 {
+        if !managed.reaped {
+            if let Some(status) = reap_exited(&mut managed.child)? {
+                managed.reaped = true;
+                if !source_manifest
+                    .is_some_and(|manifest| listener_source_exited_successfully(manifest, status))
+                {
+                    // The child can exit after writing data that is still buffered in
+                    // stdout. Drain and deliver that data before reporting its status.
+                    *failure_status = Some(status);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn listen(
     source: &ListenSource,
     binding: &str,
@@ -119,20 +144,7 @@ fn listen(
     let mut failure_status = None;
     loop {
         stopped(signals)?;
-        for managed in &mut children.0 {
-            if !managed.reaped {
-                if let Some(status) = reap_exited(&mut managed.child)? {
-                    managed.reaped = true;
-                    if !source_manifest.is_some_and(|manifest| {
-                        listener_source_exited_successfully(manifest, status)
-                    }) {
-                        // The child can exit after writing data that is still buffered in
-                        // stdout. Drain and deliver that data before reporting its status.
-                        failure_status = Some(status);
-                    }
-                }
-            }
-        }
+        reap_listener_children(&mut children, source_manifest, &mut failure_status)?;
         let readable = match reader {
             Reader::Applet(_) => true,
             Reader::Stdin(_) => match crate::platform::unix_ffi::poll_one(fd, libc::POLLIN, 0) {
@@ -157,6 +169,11 @@ fn listen(
                             emit,
                             result,
                             journal.as_deref_mut(),
+                        )?;
+                        reap_listener_children(
+                            &mut children,
+                            source_manifest,
+                            &mut failure_status,
                         )?;
                         if finish_listener_at_limit(limits, result, failure_status)? {
                             return Ok(());
@@ -185,6 +202,11 @@ fn listen(
                                 emit,
                                 result,
                                 journal.as_deref_mut(),
+                            )?;
+                            reap_listener_children(
+                                &mut children,
+                                source_manifest,
+                                &mut failure_status,
                             )?;
                             if finish_listener_at_limit(limits, result, failure_status)? {
                                 return Ok(());

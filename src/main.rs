@@ -787,6 +787,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "migrate") {
         return migrate_cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "env") {
+        return env_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
@@ -2764,9 +2767,6 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             } else {
                 #[cfg(feature = "records")]
                 let result = if let Some(directory) = args.record_dir.as_deref() {
-                    if checkpoint.is_some() {
-                        bail!("--record cannot be combined with checkpoints");
-                    }
                     flow::security::register_sensitive_inputs(
                         &registry,
                         &program.inputs,
@@ -2780,22 +2780,31 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &std::sync::atomic::AtomicBool::new(false),
                         None,
                     )?;
-                    record_cli::run_recorded(
-                        directory,
-                        &args.file,
-                        &program,
-                        &registry,
-                        &options,
-                        args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
-                        flow::record::RecordProvenance {
-                            capability_policy_path: args.capability_policy.as_deref(),
-                            data_flow_policy_path: args.data_flow_policy.as_deref(),
-                            program_arguments: &args.program_arguments,
-                            allow: &args.allow,
-                            what_if_fingerprint: args.confirm.as_deref(),
-                        },
-                    )
-                    .map_err(|error| redact_runtime_error(&registry, error))?
+                    let provenance = flow::record::RecordProvenance {
+                        capability_policy_path: args.capability_policy.as_deref(),
+                        data_flow_policy_path: args.data_flow_policy.as_deref(),
+                        program_arguments: &args.program_arguments,
+                        allow: &args.allow,
+                        what_if_fingerprint: args.confirm.as_deref(),
+                    };
+                    // A checkpointed record (#544) runs under the checkpoint's lineage;
+                    // the library refuses the combinations it does not support.
+                    let recorded = match checkpoint.as_ref() {
+                        Some(checkpoint) => record_cli::run_recorded_checkpointed(
+                            directory, &args.file, &program, &registry, &options, checkpoint,
+                            provenance,
+                        ),
+                        None => record_cli::run_recorded(
+                            directory,
+                            &args.file,
+                            &program,
+                            &registry,
+                            &options,
+                            args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
+                            provenance,
+                        ),
+                    };
+                    recorded.map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
                     // Uncaptured stdout streams to this terminal as it is produced.
                     runtime::with_streamed_stdout(|| {
@@ -4334,12 +4343,93 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute fmt [--check] FILE\n       execute migrate scan [--home DIR] [--json]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --json=compact          One-line check result (check); several files print one line each\n  --stdin, -              Check program text from standard input (check; name it with --path NAME)\n  --path NAME             File name used for the standard input program in messages (check)\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute env PROGRAM --format bash\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute fmt [--check] FILE\n       execute migrate scan [--home DIR] [--json]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --json=compact          One-line check result (check); several files print one line each\n  --stdin, -              Check program text from standard input (check; name it with --path NAME)\n  --path NAME             File name used for the standard input program in messages (check)\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --hardening MODE        Service generate hardening: derived, baseline or none\n  --filter NAME           Run only the test named NAME (test)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --schedule-state FILE   Keep a triggered program's cron progress in FILE across restarts (run)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
   --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --confirm-report FILE  Saved what-if report to diff when --confirm does not match (run)\n  --model-fixtures DIR    Replay model calls from DIR (run/resume; wins over EXECUTE_MODEL_FIXTURES)\n  --model-budget BUDGET   Limit model calls, e.g. calls=50,tokens=200000 (run/resume; wins over EXECUTE_MODEL_BUDGET)\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume; default jsonl for graphs with persistent nodes, document otherwise)"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {
     writeln!(io::stdout(), "{}", serde_json::to_string_pretty(value)?)?;
+    Ok(())
+}
+
+/// `execute env PROGRAM --format bash` (issue #404): run a finite program that
+/// declares `produce json` and whose result is a flat object of text values, then
+/// print each member as a shell-quoted `export NAME='value'` line for the caller to
+/// `eval`. The program never changes the caller's environment; the printed text does.
+/// Only the bash format exists so far.
+fn env_cli(arguments: &[String]) -> Result<()> {
+    let mut file: Option<PathBuf> = None;
+    let mut format: Option<&str> = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--format" => {
+                if format.is_some() {
+                    bail!("--format may be specified only once");
+                }
+                index += 1;
+                format = Some(
+                    arguments
+                        .get(index)
+                        .context("--format requires a format name")?
+                        .as_str(),
+                );
+            }
+            option if option.starts_with('-') => bail!("unknown option for env: {option}"),
+            program => {
+                if file.is_some() {
+                    bail!("env takes one program file");
+                }
+                file = Some(PathBuf::from(program));
+            }
+        }
+        index += 1;
+    }
+    match format {
+        Some("bash") => {}
+        Some(other) => bail!("env supports --format bash only, not {other:?}"),
+        None => bail!("usage: execute env PROGRAM --format bash"),
+    }
+    let file = file.context("usage: execute env PROGRAM --format bash")?;
+    let path = fs::canonicalize(&file).with_context(|| format!("resolving {}", file.display()))?;
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("reading {}", file.display()))?;
+    let registry = load_registry(None, None, ManifestCheck::Lazy)?;
+    let cwd = env::current_dir()?;
+    let program = flow::program_files::parse_source_resolved(
+        &path,
+        &source,
+        Some(flow::program_files::Access {
+            registry: &registry,
+            cwd: &cwd,
+        }),
+    )
+    .with_context(|| format!("could not parse workflow {}", file.display()))?;
+    if program.trigger.is_some() {
+        bail!("env applies to finite programs, not triggered programs");
+    }
+    match program.output.as_ref().map(|output| output.kind) {
+        Some(flow::ast::OutputType::Json) => {}
+        _ => bail!(
+            "env needs a program that declares `produce json` with a flat record of text values"
+        ),
+    }
+    let options = RunOptions::new(cwd);
+    let result = runtime::run(&program, &registry, &options)
+        .map_err(|error| redact_runtime_error(&registry, error))?;
+    let text =
+        std::str::from_utf8(&result.output).context("the program's output is not UTF-8 text")?;
+    let record: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(text.trim()).context("the program's output is not a JSON object")?;
+    let mut pairs = Vec::with_capacity(record.len());
+    for (name, value) in &record {
+        let text = value
+            .as_str()
+            .with_context(|| format!("{name} is not a text value; env exports only text"))?;
+        pairs.push((name.as_str(), text));
+    }
+    let lines = flow::env_export::bash_export_lines(pairs).map_err(|error| anyhow!("{error}"))?;
+    write!(io::stdout(), "{lines}")?;
     Ok(())
 }
 

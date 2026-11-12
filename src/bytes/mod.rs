@@ -78,7 +78,7 @@ mod tests {
         const SPECIAL: [u8; 12] = [
             b'\n', b'\r', b'\t', b',', b'"', 0x00, 0x1f, 0x20, 0x7e, 0x7f, 0x80, 0xff,
         ];
-        if random % 3 == 0 {
+        if random.is_multiple_of(3) {
             SPECIAL[(random as usize >> 2) % SPECIAL.len()]
         } else {
             (random >> 8) as u8
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn unsupported_control_allows_tab_and_bytes_above_del() {
-        let allowed: Vec<u8> = (0x20..=0x7e).chain([b'\t']).chain(0x80..=0xff).collect();
+        let allowed: Vec<u8> = (0x20..=0x7e).chain(*b"\t").chain(0x80..=0xff).collect();
         for offset in 0..=63 {
             for length in 0..=130 {
                 let backing: Vec<u8> = allowed

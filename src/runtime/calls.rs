@@ -380,10 +380,11 @@ pub(super) fn preflight(
                     std::mem::replace(&mut values, Cow::Owned(child)),
                     std::mem::replace(&mut types, child_types),
                     call.binding.clone(),
+                    call.status_binding.clone(),
                 ));
             }
             StepKind::EndCall => {
-                let (parent, parent_types, binding) = scopes
+                let (parent, parent_types, binding, status_binding) = scopes
                     .pop()
                     .context("program return without preflight scope")?;
                 values = parent;
@@ -391,6 +392,10 @@ pub(super) fn preflight(
                 if let Some(name) = binding {
                     forget(&mut values, &name);
                     types.insert(name, InputType::Text);
+                }
+                if let Some(name) = status_binding {
+                    forget(&mut values, &name);
+                    types.insert(name, InputType::Integer);
                 }
             }
             StepKind::TaskGroup {
@@ -804,10 +809,11 @@ mod tests {
                         std::mem::replace(&mut values, child),
                         std::mem::replace(&mut types, child_types),
                         call.binding.clone(),
+                        call.status_binding.clone(),
                     ));
                 }
                 StepKind::EndCall => {
-                    let (parent, parent_types, binding) = scopes
+                    let (parent, parent_types, binding, status_binding) = scopes
                         .pop()
                         .context("program return without preflight scope")?;
                     values = parent;
@@ -815,6 +821,10 @@ mod tests {
                     if let Some(name) = binding {
                         values.remove(&name);
                         types.insert(name, InputType::Text);
+                    }
+                    if let Some(name) = status_binding {
+                        values.remove(&name);
+                        types.insert(name, InputType::Integer);
                     }
                 }
                 StepKind::Invoke { call, .. } => {
@@ -859,6 +869,41 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reusable_status_binding_stays_integer_through_preflight() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        // Bundled roots verify each loaded file against the embedded copy.
+        fs::write(
+            root.path().join("core.number_add.json"),
+            include_str!("../../manifests/core.number_add.json"),
+        )?;
+        let registry = Registry::from_bundled(root.path())?;
+        let definitions = "define a program named inner\n  run \"true\"\ndefine a program named outer\n  run program inner as rendered and keep status as code\n  run number.add with left code and right 1 as sum\n";
+        let accepted = format!(
+            "{definitions}run program outer as rendered and keep status as code\nrun number.add with left code and right 2 as total\n"
+        );
+        let rejected = format!(
+            "{definitions}run program outer as rendered and keep status as code\nrun number.add with left rendered and right 2 as total\n"
+        );
+        for (source, expect_ok) in [(accepted, true), (rejected, false)] {
+            let program = crate::parser::parse(&source)?;
+            let candidate = preflight(&program, &registry, &BTreeMap::new(), None);
+            let legacy = legacy_preflight(&program, &registry, &BTreeMap::new());
+            assert_eq!(
+                candidate.as_ref().map_err(|error| format!("{error:#}")),
+                legacy.as_ref().map_err(|error| format!("{error:#}")),
+            );
+            assert_eq!(
+                candidate.is_ok(),
+                expect_ok,
+                "source={:?}, error={:?}",
+                source.escape_debug().to_string(),
+                candidate.as_ref().err().map(|error| format!("{error:#}"))
+            );
         }
         Ok(())
     }

@@ -938,6 +938,37 @@ fn analyze_source_impl(
                     &line_starts,
                 ));
             }
+            if !callee_parse_error {
+                // The same pass reports every independent syntax error (#470). The first
+                // collected error is the one reported above, so only the later ones are
+                // added, each on a line that no other diagnostic already names.
+                let report = parser::parse_collecting_errors(source);
+                let mut named_lines = local_error_lines.clone();
+                named_lines.insert(error_line);
+                for error in report.errors.iter().skip(1) {
+                    let line = error.line.unwrap_or(1);
+                    if named_lines.insert(line) {
+                        diagnostics.push(classified_parse_error(
+                            source,
+                            &error.message,
+                            line,
+                            &line_starts,
+                        ));
+                    }
+                }
+                if report.truncated {
+                    diagnostics.push(Diagnostic::error(
+                        "check.diagnostics.truncated",
+                        "diagnostic output limit reached; further syntax errors omitted",
+                        line_starts.span_at(
+                            source,
+                            source.len(),
+                            source.len(),
+                            SpanPrecision::Line,
+                        ),
+                    ));
+                }
+            }
         }
     }
 

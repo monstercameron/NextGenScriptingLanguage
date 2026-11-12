@@ -13,6 +13,8 @@ pub(crate) struct Args {
     /// leading `--help` is data for the program rather than a help request.
     pub(crate) program_arguments_literal: bool,
     pub(crate) json: bool,
+    /// `check --json=compact`: the check result on one line, from `render_check_compact`.
+    pub(crate) json_compact: bool,
     /// `check --explain CODE`: print the published diagnostic entry.
     pub(crate) diagnostic_explain: Option<String>,
     pub(crate) resolve: bool,

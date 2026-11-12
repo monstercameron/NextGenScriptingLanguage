@@ -781,6 +781,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "doctor") {
         return doctor_cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "fmt") {
+        return fmt_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
@@ -850,6 +853,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
         let github = args.github;
+        let json_compact = args.json_compact;
         let deny_warnings = args.deny_warnings;
         let result = execute_workflow(args, finite_check_snapshot);
         if !json {
@@ -940,11 +944,20 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         if github {
             github_annotations::write(&path, &diagnostics)?;
         } else {
-            write_json(&serde_json::json!({
+            let report = serde_json::json!({
                 "protocol": "execute.check/1", "validation": "static",
                 "ok": result.is_ok() && !has_static_error && !has_denied_warning, "path": path, "path_bytes": path_bytes,
                 "diagnostics": diagnostics
-            }))?;
+            });
+            if json_compact {
+                writeln!(
+                    io::stdout(),
+                    "{}",
+                    flow::diagnostics::render_check_compact(&report)
+                )?;
+            } else {
+                write_json(&report)?;
+            }
         }
         if result.is_err() || has_static_error || has_denied_warning {
             // Validation has no spawned workers/effects. The JSON response is
@@ -1094,6 +1107,40 @@ fn doctor_cli(arguments: &[String]) -> Result<()> {
     if flow::doctor::has_failures(&checks) {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// `execute fmt FILE [--check]` (#345): rewrites FILE into the canonical layout, and only
+/// when its text changes, with the atomic write `check --fix` uses. With `--check` it
+/// writes nothing and exits 1 when FILE is not already formatted. A file that does not
+/// parse, or that formatting would change in meaning, fails with the library's message
+/// and exit status 1, the status every other command failure uses.
+fn fmt_cli(arguments: &[String]) -> Result<()> {
+    let (check, file) = match arguments {
+        [file] if file != "--check" => (false, file),
+        [flag, file] if flag == "--check" => (true, file),
+        [file, flag] if flag == "--check" => (true, file),
+        _ => bail!("usage: execute fmt [--check] FILE"),
+    };
+    if file == "/dev/stdin" {
+        bail!(
+            "fmt writes the program file back, so it cannot read the program from standard input"
+        );
+    }
+    let path = Path::new(file);
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("could not read workflow {}", path.display()))?;
+    let formatted = flow::format::format_program(&source)
+        .map_err(|error| anyhow!("{}: {error}", path.display()))?;
+    if formatted == source {
+        return Ok(());
+    }
+    if check {
+        eprintln!("{}: not formatted", path.display());
+        std::process::exit(1);
+    }
+    write_file_atomically(path, formatted.as_bytes())?;
+    eprintln!("formatted {}", path.display());
     Ok(())
 }
 
@@ -3979,7 +4026,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute fmt [--check] FILE\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
   --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --confirm-report FILE  Saved what-if report to diff when --confirm does not match (run)\n  --model-fixtures DIR    Replay model calls from DIR (run/resume; wins over EXECUTE_MODEL_FIXTURES)\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 

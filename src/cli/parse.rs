@@ -30,6 +30,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    let mut json_compact = false;
     let mut diagnostic_explain = None;
     let mut deny_warnings = false;
     let mut fix = false;
@@ -114,6 +115,13 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--json=compact" if command == "check" => {
+                if json {
+                    bail!("--json=compact cannot be combined with --json or --format");
+                }
+                json = true;
+                json_compact = true;
             }
             "--explain" if command == "check" => {
                 if diagnostic_explain.is_some() {
@@ -606,6 +614,9 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
             "--fix writes the program file back, so it cannot read the program from standard input"
         );
     }
+    if json_compact && github {
+        bail!("--json=compact cannot be combined with --format github");
+    }
     if command == "resume" && checkpoint_dir.is_none() && from_record_dir.is_none() {
         bail!("resume requires --checkpoint DIR or --from-record DIR");
     }
@@ -638,6 +649,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         program_arguments,
         program_arguments_literal,
         json,
+        json_compact,
         diagnostic_explain,
         deny_warnings,
         fix,

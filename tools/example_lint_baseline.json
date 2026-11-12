@@ -1,0 +1,10 @@
+{
+  "corpus": "examples",
+  "counts": {
+    "example.jq_object_build": 246,
+    "example.printf_bind": 60,
+    "example.text_concat_json": 0,
+    "example.unread_binding": 241
+  },
+  "version": 1
+}

@@ -547,9 +547,9 @@ Tests use local fixtures; provider credentials are not needed. `make check` buil
 
 ## Documentation
 
-Start at the **[documentation index](docs/README.md)** for current guides,
-architecture, contribution paths and a separate map of historical evidence.
-For an Omarchy desktop, the [Omarchy quickstart](docs/omarchy-quickstart.md) covers a
+Start at the **[documentation index](docs/README.md)**. It groups the guides into
+tutorials, how-to guides, reference and explanation, and lists the evidence reports
+separately. For an Omarchy desktop, the [Omarchy quickstart](docs/omarchy-quickstart.md) covers a
 source build, a Hyprland toggle, a test with a fake `hyprctl`, and a user service.
 
 Which interfaces are versioned or stated stable, and how changes are announced

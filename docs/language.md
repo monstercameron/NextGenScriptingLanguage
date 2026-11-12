@@ -625,8 +625,10 @@ before any effect; the statements of a program with `on exit` count as nested.
 
 A statement may start with a label: one word ending in a colon, such as `fetch:`.
 The label names the statement's first step, so a compound statement is named by its
-opening step. Labels start with a letter and use only letters, digits, `_` and `-`.
-They must be unique in their program body, and they cannot be statement keywords
+opening step. A statement inside an `if`, `otherwise`, loop, `try`, `catch`, `finally`
+or temporary-scope body takes a label the same way. Labels start with a letter and use
+only letters, digits, `_` and `-`. They must be unique in their program body, including
+statements nested in those bodies, and they cannot be statement keywords
 such as `if`, `run` or `then`. A label cannot precede a declaration, a trigger or a
 clause, and a statement takes at most one label.
 

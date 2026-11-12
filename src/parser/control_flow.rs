@@ -1,6 +1,6 @@
 //! Source syntax for lexical transfers and structured error/cleanup blocks.
 use super::{
-    ensure_end, parse_binding_identifier, parse_statement_in_scope, parse_value, word_is,
+    ensure_end, parse_binding_identifier, parse_labelled_statement, parse_value, word_is,
     BlockLine, StatementScope, Token, MAX_CONTROL_DEPTH,
 };
 use crate::ast::{Step, StepKind, Value};
@@ -254,7 +254,7 @@ fn parse_body<'arena, 'source: 'arena>(
         .ok_or_else(|| anyhow!("line {line}: {name} body must contain an indented statement"))?;
     let before = steps.len();
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+        parse_labelled_statement(line_at, cursor, body_indent, steps, depth + 1, scope)?;
     }
     if steps.len() == before {
         bail!("line {line}: {name} body cannot be empty");

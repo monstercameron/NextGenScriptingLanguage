@@ -57,7 +57,7 @@ pub(super) fn parse_temp_scope<'arena, 'source: 'arena>(
             )
         })?;
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+        parse_labelled_statement(line_at, cursor, body_indent, steps, depth + 1, scope)?;
     }
     let back = steps.len() - start;
     steps.push(Step {

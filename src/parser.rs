@@ -807,7 +807,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
             )
         })?;
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+        parse_labelled_statement(line_at, cursor, body_indent, steps, depth + 1, scope)?;
     }
     let mut alternative = None;
     if let Some(otherwise) = line_at(*cursor)
@@ -846,7 +846,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
             }
             let otherwise_body_indent = line_at(*cursor).expect("otherwise body").indent;
             while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-                parse_statement_in_scope(
+                parse_labelled_statement(
                     line_at,
                     cursor,
                     otherwise_body_indent,
@@ -1019,7 +1019,7 @@ fn parse_loop<'arena, 'source: 'arena>(
             )
         })?;
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement_in_scope(
+        parse_labelled_statement(
             line_at,
             cursor,
             body_indent,

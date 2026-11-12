@@ -1,0 +1,77 @@
+name: New applet
+description: Propose a manifest for a native command that Execute programs can call by a stable name.
+title: "Applet: "
+labels: ["applet"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An applet is a manifest in `manifests/` that maps a stable name to one native
+        binary, its literal argument vector and its declared parameters. Applets are where new
+        capabilities go; the grammar does not grow for them. Read docs/applet-contracts.md first.
+  - type: input
+    id: name
+    attributes:
+      label: Applet name
+      description: Lower-case, dotted or hyphenated name, as it will appear in manifests/<name>.json.
+      placeholder: text.trim
+    validations:
+      required: true
+  - type: input
+    id: binary
+    attributes:
+      label: Native binary
+      description: The executable the applet runs, and the package that provides it on macOS and Linux.
+      placeholder: tr (coreutils), jq 1.7
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One sentence on what the applet does, written the way the manifest description field reads.
+      placeholder: Removes leading and trailing whitespace from each line of standard input.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Parameters, arguments and stdin
+      description: List each parameter with its type, the literal argv it produces, and whether the applet accepts standard input. Name any value that must never reach a shell.
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: Example program
+      description: A small .program that calls the applet and prints the expected output. Use only local fixture data.
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure behavior
+      description: What the applet does when the binary is missing, exits non-zero or writes to stderr.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Commands you ran and their results. At minimum, inspect the applet after building the release binary.
+      value: |
+        make build
+        target/release/execute applets inspect <name>
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I read CONTRIBUTING.md, including the security checklist.
+          required: true
+        - label: The argument vector is literal. No shell is introduced for an ordinary command.
+          required: true
+        - label: The example uses only local fixtures and needs no network access or credentials.
+          required: true

@@ -1,0 +1,73 @@
+name: Port an Omarchy command
+description: Propose or claim the port of one Omarchy Bash command to an Execute program.
+title: "Port: "
+labels: ["port"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A port keeps the Bash original and the Execute program side by side under
+        `examples/omarchy-ports/<script>/` with a `case.json` of fake-backend cases.
+        Use only fake binaries and files in your cases. Do not paste credentials, personal
+        paths or the contents of a real Omarchy configuration.
+  - type: input
+    id: script
+    attributes:
+      label: Omarchy script name
+      description: The script file name as it appears in the Omarchy source, for example omarchy-hyprland-toggle-enabled.
+      placeholder: omarchy-hyprland-toggle-enabled
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source location and commit
+      description: Link to the script at a fixed commit so the Bash behavior you ported can be checked.
+      placeholder: https://github.com/omacom/omarchy/blob/<commit>/bin/<script>
+    validations:
+      required: true
+  - type: dropdown
+    id: state
+    attributes:
+      label: Work state
+      description: Choose the state that matches what you are offering to do.
+      options:
+        - I want to claim this port
+        - I have a draft port and want a review
+        - I found this command and want someone else to port it
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Behavior to preserve
+      description: List the exit statuses, stdout and stderr, files touched and missing-tool behavior the port must match.
+    validations:
+      required: true
+  - type: textarea
+    id: cases
+    attributes:
+      label: Fake-backend cases
+      description: Name each case in case.json and say what it checks, for example a missing flag file exits with status 1.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: The port is done when the command below ends with a line like "N/N cases identical" and prints no FAIL line for this script. Add any extra check you ran.
+      value: |
+        python3 tools/port_compare.py --binary target/release/execute
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I read CONTRIBUTING.md and the language reference in docs/language.md.
+          required: true
+        - label: The port uses only fake binaries and files created in its case.json.
+          required: true
+        - label: I have not added grammar. Behavior that needs a new capability belongs in an applet.
+          required: true

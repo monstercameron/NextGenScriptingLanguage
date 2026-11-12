@@ -1,0 +1,33 @@
+# Code owners are requested for review on pull requests that touch their paths.
+# The last matching pattern wins. Whether a review from a code owner is required
+# before merging is a branch-protection setting, which this file does not control.
+
+# Default owner for every path not listed below.
+* @monstercameron
+
+# Language, runtime and CLI implementation.
+/src/ @monstercameron
+
+# Applet argv contracts and the bundled manifest index.
+/manifests/ @monstercameron
+/src/bundled_manifests/ @monstercameron
+
+# Regression, fuzz and fixture tests.
+/tests/ @monstercameron
+/fuzz/ @monstercameron
+
+# Omarchy ports, the port comparison tool and the other tools.
+/examples/omarchy-ports/ @monstercameron
+/tools/ @monstercameron
+
+# Workflows, templates and repository configuration.
+/.github/ @monstercameron
+/Cargo.toml @monstercameron
+/Cargo.lock @monstercameron
+/deny.toml @monstercameron
+
+# Language and security documentation.
+/docs/language.md @monstercameron
+/docs/threat-model.md @monstercameron
+/SECURITY.md @monstercameron
+/CONTRIBUTING.md @monstercameron

@@ -189,6 +189,34 @@ Run `git diff --check` and inspect the staged file list before committing. Do no
 use broad cleanup commands against unknown local files, installed releases or
 ignored directories that may contain a contributor's data.
 
+## Starting points
+
+Two issue forms cover the most common first contributions. The
+[port form](.github/ISSUE_TEMPLATE/port-command.yml) is for one Omarchy Bash command.
+Each port lives in `examples/omarchy-ports/<script>/` as the Bash original, a
+`port.program` and a `case.json` of fake-backend cases, and
+`python3 tools/port_compare.py --binary target/release/execute` compares the two.
+The [applet form](.github/ISSUE_TEMPLATE/new-applet.yml) is for a new manifest in
+`manifests/`. Read the [applet contracts](docs/applet-contracts.md) first; new
+capabilities belong in applets, not in grammar. The bundled index in
+`src/bundled_manifests/` is generated from `manifests/`, and its staleness test fails
+until you regenerate it with `EXECUTE_UPDATE_BUNDLED_INDEX=1 cargo test`.
+
+## Review and merge
+
+- Every pull request runs the `ci.yml` (Native checks) workflow, which includes
+  `make check` on Ubuntu and macOS, the native Windows jobs and the Linux budget jobs.
+  The workflow table above lists the other checks that run on pull requests.
+- [`.github/CODEOWNERS`](.github/CODEOWNERS) names the maintainer for each area.
+  GitHub requests a review from the owners of the paths a pull request changes.
+  The repository files do not say whether an owner's approval is required before a
+  merge; that is a branch-protection setting, and it is not recorded here.
+- The pull-request template asks for the security checklist whenever a change touches
+  a path, process, terminal, secret or resource limit. Answer it in the description.
+- Changes to the language contract ([language reference](docs/language.md)) or to the
+  [threat model](docs/threat-model.md) are reviewed against those documents, and the
+  matching guide is updated in the same pull request.
+
 ## Security checklist
 
 Every change that touches a path, a process, the terminal, secret values or a

@@ -297,7 +297,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             }
             "textDocument/hover" => {
                 let manifests = registry.manifests()?;
-                Some(hover(&params, &documents, &manifests))
+                Some(hover(&params, &documents, &registry, &manifests))
             }
             "textDocument/definition" => Some(definition(&params, &documents)),
             "textDocument/references" => Some(references(&params, &documents)),
@@ -3257,9 +3257,65 @@ fn collect_jobs(source: &str, before_line: usize) -> Vec<JobDecl> {
         .collect()
 }
 
+/// Markdown naming the effects the explain plan states for the step on `line`
+/// (1-based). It reads the same rows as `explain --json`. Returns None when no
+/// plan row on that line has an effect or an undeclared flag.
+fn step_effects_markdown(
+    source: &str,
+    program_path: &str,
+    line: usize,
+    registry: &Registry,
+) -> Option<String> {
+    let program = crate::parser::parse(source).ok()?;
+    let plan = crate::agent::explain::explain_json(&program, registry, program_path).ok()?;
+    let mut categories = BTreeSet::new();
+    let mut undeclared = false;
+    for row in plan["steps"]
+        .as_array()?
+        .iter()
+        .filter(|row| row["line"].as_u64() == Some(line as u64))
+    {
+        for flag in [
+            "writes",
+            "network",
+            "reads",
+            "cwd_change",
+            "process",
+            "privileged",
+        ] {
+            if row[flag] == true {
+                categories.insert(flag.to_owned());
+            }
+        }
+        if let Some(effects) = row["effects"].as_array() {
+            categories.extend(
+                effects
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(str::to_owned),
+            );
+        }
+        undeclared |= row["undeclared"] == true;
+    }
+    let mut lines = Vec::new();
+    if !categories.is_empty() {
+        let names = categories
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("**Effects:** {names}"));
+    }
+    if undeclared {
+        lines.push("**Undeclared:** the effects of this step cannot be stated.".to_owned());
+    }
+    (!lines.is_empty()).then(|| lines.join("\n\n"))
+}
+
 fn hover(
     params: &JsonValue,
     documents: &BTreeMap<String, Document>,
+    registry: &Registry,
     manifests: &[&crate::manifest::Manifest],
 ) -> JsonValue {
     let Some((uri, position)) = text_document_position(params) else {
@@ -3274,6 +3330,9 @@ fn hover(
     if let Some((name, definition)) = program_symbol_at(&document.text, offset) {
         return json!({ "contents": { "kind": "markdown", "value": format!("Reusable program `{name}` defined at line {}.", definition.line) } });
     }
+    let program_path =
+        local_file_path(uri).map_or_else(|| uri.to_owned(), |path| path.display().to_string());
+    let effects = step_effects_markdown(&document.text, &program_path, position.line + 1, registry);
     if let Some(manifest) = manifest_at(&document.text, offset, manifests) {
         let contract = manifest.contract();
         let details = json!({
@@ -3283,9 +3342,20 @@ fn hover(
             "ports": contract.get("ports").cloned().unwrap_or(JsonValue::Null),
             "execution": contract["execution"]
         });
-        return json!({ "contents": { "kind": "markdown", "value": format!("### Execute applet `{}`\n\n```json\n{}\n```", manifest.name, serde_json::to_string_pretty(&details).unwrap_or_default()) } });
+        let mut value = format!(
+            "### Execute applet `{}`\n\n```json\n{}\n```",
+            manifest.name,
+            serde_json::to_string_pretty(&details).unwrap_or_default()
+        );
+        if let Some(effects) = &effects {
+            value = format!("{effects}\n\n{value}");
+        }
+        return json!({ "contents": { "kind": "markdown", "value": value } });
     }
-    JsonValue::Null
+    effects.map_or(
+        JsonValue::Null,
+        |value| json!({ "contents": { "kind": "markdown", "value": value } }),
+    )
 }
 
 fn manifest_at<'a>(
@@ -3751,6 +3821,18 @@ fn line_bounds(source: &str, line: usize) -> Option<(usize, usize)> {
 mod tests {
     use super::*;
     use crate::manifest::Registry;
+
+    #[test]
+    fn step_effects_name_the_plan_categories_of_the_hovered_line() {
+        let source = "use value \"hello\"\nthen save to \"out.txt\"\nrun \"printf\" with arguments [\"x\"]\n";
+        let registry = Registry::default();
+        let save = step_effects_markdown(source, "demo.program", 2, &registry).unwrap();
+        assert!(save.contains("`writes`"), "{save}");
+        let process = step_effects_markdown(source, "demo.program", 3, &registry).unwrap();
+        assert!(process.contains("`process`"), "{process}");
+        assert!(process.contains("cannot be stated"), "{process}");
+        assert!(step_effects_markdown(source, "demo.program", 1, &registry).is_none());
+    }
 
     fn request(id: u64, method: &str, params: JsonValue) -> JsonValue {
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })

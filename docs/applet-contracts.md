@@ -1233,3 +1233,228 @@ executables and host; it cannot establish a universal speed advantage. Omarchy
 happy-path timings are reported separately from correctness improvements.
 The [paired Omarchy harness](../benchmarks/omarchy_success.py) reuses its
 owned Bash-differential fixtures and has no result until the final-build gate.
+
+## Authoring an applet: a worked example
+
+This section walks through one complete applet, from manifest to tested call.
+The manifest fields named here are read by the manifest parser in
+`src/manifest.rs` (`RawManifest` and `RawParameter`, then `parse_manifest`).
+The worker protocol is the one implemented by `examples/desktop/workers.py`.
+Execute has no SDK, scaffolding command or conformance command for worker
+authors (see the end of this section), so the protocol is implemented directly.
+
+Choose a backend first. `command` launches an executable for each call, which
+suits an existing CLI. `json_lines_worker` keeps a helper process alive across
+calls, which suits an interpreter that is slow to start. `in_process` runs one
+of the bundled generic operations and is not a route for new third-party code.
+The backend table in [execution backends](#execution-backends-and-lifetimes)
+lists their limits. The example below uses `json_lines_worker`.
+
+### The manifest
+
+The applet formats a number of seconds since midnight UTC. Save the following
+as `my-applets/example.clock_format.json`. The file name follows the shipped
+convention `<name>.json` seen in `manifests/`; the loader does not check it
+against the `name` field.
+
+```json
+{
+  "name": "example.clock_format",
+  "description": "Formats a number of seconds since midnight UTC as HH:MM:SS UTC.",
+  "phrases": ["format clock seconds"],
+  "binary": "python3",
+  "accepts_stdin": false,
+  "parameters": {
+    "seconds": {
+      "type": "integer",
+      "required": true,
+      "description": "Seconds since midnight UTC. Values are reduced modulo one day."
+    }
+  },
+  "arguments": [
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "json_lines_worker",
+    "lifecycle": {
+      "kind": "json_lines",
+      "startup_arguments": ["-u", "examples/desktop/workers.py", "--worker", "clock_format"],
+      "timeout_ms": 3000,
+      "max_frame_bytes": 1048576,
+      "max_stderr_bytes": 8192
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": { "text": { "type": "text" } },
+      "required": ["text"]
+    },
+    "capabilities": ["time.format"],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "seconds": { "schema": { "type": "integer" }, "delivery": "records" }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": { "text": { "type": "text" } },
+            "required": ["text"]
+          },
+          "delivery": "records"
+        }
+      }
+    }
+  }
+}
+```
+
+Field by field:
+
+- `name` and `binary` are required and must be nonempty. `phrases` are optional
+  alternative names; each must be nonempty, unique within the manifest and
+  different from `name`. `description`, when present, must be one line
+  (`parse_manifest` in `src/manifest.rs`). The parser does not require a
+  description. `binary` is the program that is launched; for this backend it is
+  the interpreter.
+- `accepts_stdin` defaults to `false` (`RawManifest` in `src/manifest.rs`). The
+  applet call's stdin is not used by the worker, which reads its requests from
+  its own framed input, so the value stays `false`.
+- `parameters` maps each parameter name to a `type` and a `required` flag.
+  `description` is accepted on a parameter (`RawParameter` in `src/manifest.rs`).
+  Integer parameters are exact signed 64-bit values (see "Applet parameter
+  types" earlier in this document).
+- `arguments` is the argv template. `[{"json_arguments": true}]` passes every
+  parameter as one JSON object in a single argument (`RawArgument::JsonArguments`
+  and `json_arguments_to_string` in `src/manifest.rs`). The worker reads that
+  object from the last element of `arguments` (`arguments_for` in
+  `examples/desktop/workers.py`).
+- `contract.version` must be `1` (`validate_interface` in `src/contracts.rs`).
+- `contract.backend` selects `json_lines_worker`, which requires
+  `lifecycle.kind` to be `json_lines` (`AppletContract::validate` in
+  `src/contracts.rs`).
+- `lifecycle.startup_arguments` is passed to the worker process unchanged. The
+  worker starts in the invocation's working directory (`worker_launch_for_call`
+  in `src/runtime.rs` passes `cwd` through), so the relative path above resolves
+  only when `execute` runs from the repository root. Use an absolute path for a
+  manifest kept elsewhere. `timeout_ms` must be 1 through 300000,
+  `max_frame_bytes` 1 through 67108864 and `max_stderr_bytes` 1 through 1048576
+  (`Lifecycle::validate` in `src/contracts.rs`). The values above are inside
+  those bounds.
+- `contract.output` declares a `record` decoded from `json`. The worker writes
+  the JSON text as the response `output` bytes, and the runtime decodes it
+  against this schema when the result is bound.
+- `contract.capabilities` are namespaced identifiers that the host matches
+  exactly against its grant policy (the `Capability` comment in
+  `src/contracts.rs`). `contract.effects` must be a subset of `capabilities`
+  (`validate_interface` in `src/contracts.rs`). This applet declares no effects
+  because it only formats its input.
+- `contract.ports` is optional (`AppletContract` in `src/contracts.rs`). The
+  shipped worker manifest `manifests/desktop.clock_format.json` declares ports in
+  the same form as above.
+
+### Worker request and response
+
+Each request is one line of JSON. The default `protocol_version` is 1, which
+uses byte arrays (see the worker protocol paragraphs earlier in this document).
+For this applet the last argument element is the JSON object built from the
+parameters. The worker in `examples/desktop/workers.py` returns the formatted
+text as a JSON object in `output`. The response decodes to
+`{"text":"01:02:05 UTC"}`:
+
+```text
+request:  {"id":1,"arguments":["example.clock_format","--args","{\"seconds\":3725}"],"input":[]}
+response: {"id":1,"status":0,"output":[123,34,116,101,120,116,34,58,34,48,49,58,48,50,58,48,53,32,85,84,67,34,125]}
+```
+
+A failure returns a nonzero `status` with a `stderr` string, as the `except`
+branch in `examples/desktop/workers.py` does. Responses must match the
+outstanding request id. A malformed, truncated or mismatched frame, or a worker
+crash, kills and reaps that worker, and Execute does not retry the request
+(the response parsing in `src/runtime/worker_backend.rs`, and the
+"Execution backends and lifetimes" section).
+
+### Discovery
+
+Pass a directory with `--manifest-dir` (`src/cli/parse.rs`). The loader reads
+every `.json` file in that directory and ignores other files (`Registry::load`
+in `src/manifest.rs`). Two manifests with the same name or phrase are refused
+(`insert_source` in `src/manifest.rs`). An explicit directory gets full
+validation and is not compared with the bundled index (see
+[the catalog section](#inspect-the-catalog)). Inspect the applet:
+
+```sh
+execute applets inspect example.clock_format --manifest-dir my-applets --json=compact
+```
+
+### Calling the applet from a program
+
+Save this as `clock.program`. It uses the same call syntax as the examples in
+[typed output](#a-manifest-with-typed-output):
+
+```text
+accept seconds as integer
+run example.clock_format with seconds seconds as clock
+take text at "/text" from clock as label
+run "printf" with arguments ["%s\n", label]
+```
+
+Run it from the repository root, so that the relative `startup_arguments` path
+resolves. `--input` supplies the program input:
+
+```sh
+execute --manifest-dir my-applets --input seconds=3725 clock.program
+```
+
+The expected standard output is `01:02:05 UTC` followed by a newline. The
+`printf` step is a native command and must be on `PATH`.
+
+### Testing against fixtures
+
+`execute test` runs each `*.test.program` in a fresh working directory, with an
+optional JSON sidecar that gives inputs and expected stdout (`docs/guide.md`,
+"Testing programs"). A sidecar for the program above would be:
+
+```text
+{ "inputs": { "seconds": 3725 }, "expect": { "status": 0, "stdout": "01:02:05 UTC\n" } }
+```
+
+This applet cannot yet run under `execute test` as written. Each test runs in a
+temporary directory, so the relative `startup_arguments` path does not resolve
+there, and the manifest has no way to name a fixture location. A worker test
+needs an absolute startup path or a fixture-relative one, which Execute does not
+provide today.
+
+The file `tests/issue_428_applet_guide.rs` parses every ` ```json ` block in
+this section with the manifest parser, so an edit that breaks a manifest fails
+the test run.
+
+### Trust gate for a manifest directory
+
+`Registry::load` applies the trust gate before it reads any manifest
+(`src/manifest.rs`):
+
+- The directory is canonicalized and checked with `verify_trusted_input_dir`
+  (`src/security.rs`). On Windows it must not be a reparse point, must be owned
+  by the current user, SYSTEM, Administrators or TrustedInstaller, and must grant
+  no write access to any other principal. On Linux no POSIX ACL may be present on
+  the path or its ancestors. Otherwise the directory is refused.
+- Each `.json` file must be a regular file. A symbolic link or reparse point is
+  refused, and each file is checked with `verify_trusted_input_file` before it
+  is read.
+- For a directory, the canonical directory becomes the module root, which
+  `program_module` applets use.
+- A `binary_sha256` field, when present, is checked against the resolved
+  executable at launch (`binary_sha256` in `src/manifest.rs`). It is optional and
+  the worked example does not use it.
+
+The gate narrows check-then-use races but does not remove them (the comment on
+the trusted-input checks in `src/security.rs`).
+
+### What is not provided
+
+No SDK, template or `execute applets conformance` command exists in the current
+source. A worker author implements the framing described above. The worker in
+`examples/desktop/workers.py` is a demonstration and not a supported library.

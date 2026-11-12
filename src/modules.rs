@@ -1193,6 +1193,17 @@ impl LoadedProgramModulePackage {
             .strip_prefix(root)
             .with_context(|| format!("package {} is outside module root", self.manifest.name))?
             .to_path_buf();
+        // The portable lock joins components with "/" and reads "\" back as a
+        // separator, so a Unix filename containing a backslash cannot round-trip.
+        if manifest.components().any(|component| {
+            matches!(component, Component::Normal(value) if value.to_string_lossy().contains('\\'))
+        }) {
+            bail!(
+                "package {} manifest path {} has a backslash in a filename; the portable module lock cannot represent it, so rename that file or directory",
+                self.manifest.name,
+                manifest.display()
+            );
+        }
         let entry = LockedProgramModule {
             manifest,
             version: self.manifest.version.clone(),
@@ -2856,6 +2867,24 @@ mod tests {
         let error =
             load_program_module_package(&manifest_path, &root, Some(&lock_path)).unwrap_err();
         assert!(format!("{error:#}").contains("SHA-256 mismatch"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_refuses_unix_filenames_with_literal_backslashes() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("modules");
+        let package_dir = root.join("dep\\child.json");
+        let manifest_path = write_package(
+            &package_dir,
+            "define a program named describe\n  accept text as text\n  run \"true\"\n",
+        );
+        let loaded = load_program_module_package(&manifest_path, &root, None).unwrap();
+        let error = loaded.lock_snapshot(&root).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("has a backslash in a filename"),
+            "{error:#}"
+        );
     }
 
     #[test]

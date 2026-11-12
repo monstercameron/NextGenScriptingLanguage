@@ -13,6 +13,7 @@ const MAX_CSV_BYTES: usize = super::shared::MAX_BYTES;
 const MAX_CSV_ROWS: usize = 100_000;
 const MAX_CSV_COLUMNS: usize = 16_384;
 const MAX_CSV_CELLS: usize = 1_000_000;
+const CHECK_INTERVAL: usize = 256;
 
 pub(super) fn parse(
     args: &Map<String, Value>,
@@ -196,10 +197,17 @@ fn read_records(
             let remaining = &text[index..end];
             let span_len = crate::bytes::find_any(remaining, b",\"\r\n").unwrap_or(remaining.len());
             if span_len > 0 {
-                for (offset, &byte) in remaining[..span_len].iter().enumerate() {
-                    checkpoint_work(context, work)?;
-                    work = work.saturating_add(1);
-                    validate_data_byte(byte, index + offset)?;
+                let span = &remaining[..span_len];
+                // Same cooperative cadence as the per-byte path: one checkpoint
+                // each time the work count crosses a CHECK_INTERVAL boundary
+                // (the constant mirrors COOPERATIVE_CHECK_INTERVAL).
+                let before = work;
+                work = work.saturating_add(span_len);
+                if before / CHECK_INTERVAL != work / CHECK_INTERVAL {
+                    context.checkpoint()?;
+                }
+                if let Some(offset) = crate::bytes::find_unsupported_control(span) {
+                    validate_data_byte(span[offset], index + offset)?;
                 }
                 field.extend_from_slice(&remaining[..span_len]);
                 index += span_len;

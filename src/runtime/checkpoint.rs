@@ -2604,7 +2604,8 @@ pub struct FailedStep {
 /// Test fixture for repair suggestions: writes `main.program` under `root`, then a
 /// checkpoint whose one step, at line 1, failed with the given retry safety and exit
 /// status. Returns the checkpoint directory.
-#[cfg(test)]
+// Its only caller is the repair module, which exists only with the records feature.
+#[cfg(all(test, feature = "records"))]
 pub(crate) fn failed_checkpoint_fixture(
     root: &Path,
     retry_safe: bool,

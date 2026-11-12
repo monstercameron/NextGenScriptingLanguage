@@ -277,6 +277,7 @@ fn tail_within(text: &str, limit: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contracts::health::{RankCandidate, RecoveryStep};
     use std::cell::Cell;
 
     fn reversible(name: &str) -> Candidate<'_> {
@@ -524,5 +525,77 @@ mod tests {
         joined.fault_code = "exit.1dependency".to_owned();
         joined.fault_class = "_down".to_owned();
         assert_ne!(sample_bundle().sha256(), joined.sha256());
+    }
+
+    /// A `RecoveryStep::Rank` as `select_recovery` produces it, with one
+    /// irreversible action that the core must drop.
+    fn rank_step() -> RecoveryStep<'static> {
+        RecoveryStep::Rank {
+            candidates: vec![
+                RankCandidate {
+                    action: "restart_dep",
+                    reversibility: EffectReversibilityStatus::Reversible {
+                        compensate: "service.undo",
+                    },
+                },
+                RankCandidate {
+                    action: "wipe_cache",
+                    reversibility: EffectReversibilityStatus::Irreversible,
+                },
+            ],
+        }
+    }
+
+    fn eligible_from_rank(step: &RecoveryStep<'_>) -> EligibleSet {
+        let RecoveryStep::Rank { candidates } = step else {
+            panic!("expected a rank step, got {step:?}");
+        };
+        let as_core: Vec<Candidate<'_>> = candidates
+            .iter()
+            .map(|candidate| Candidate {
+                name: candidate.action,
+                reversibility: candidate.reversibility,
+            })
+            .collect();
+        eligible_actions(&as_core).expect("rank candidates are valid")
+    }
+
+    #[test]
+    fn rank_step_choice_is_drawn_from_the_eligible_set() {
+        let step = rank_step();
+        let eligible = eligible_from_rank(&step);
+        assert_eq!(eligible.labels(), ["restart_dep", "escalate"]);
+
+        let mut state = IncidentState::new();
+        let decision = decide(
+            &mut state,
+            &eligible,
+            DEFAULT_MINIMUM_CONFIDENCE,
+            |labels: &[String]| {
+                assert!(labels.iter().any(|label| label == "restart_dep"));
+                verdict("restart_dep", 90)
+            },
+        );
+        assert_eq!(decision.choice, "restart_dep");
+        assert_eq!(decision.reason, Reason::ModelChoice);
+        assert_eq!(decision.decided_by, Decider::Model);
+    }
+
+    #[test]
+    fn rank_step_label_outside_the_eligible_set_escalates() {
+        let step = rank_step();
+        let eligible = eligible_from_rank(&step);
+
+        // `wipe_cache` is declared but irreversible, so it is not in the set.
+        let mut state = IncidentState::new();
+        let decision = decide(
+            &mut state,
+            &eligible,
+            DEFAULT_MINIMUM_CONFIDENCE,
+            |_: &[String]| verdict("wipe_cache", 99),
+        );
+        assert_eq!(decision.choice, ESCALATE);
+        assert_eq!(decision.reason, Reason::OutOfSet);
+        assert_eq!(decision.decided_by, Decider::Model);
     }
 }

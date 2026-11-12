@@ -1236,7 +1236,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             &args.inputs,
             &args.program_arguments,
         )?;
-        let inputs = if args.command == "run" {
+        let inputs = if matches!(args.command, "run" | "resume") {
             flow::inputs::resolve(parsed_graph.input_declarations(), &supplied_inputs, false)?
         } else {
             supplied_inputs

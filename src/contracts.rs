@@ -1614,6 +1614,27 @@ pub(crate) fn schema_at_pointer(root: &ValueSchema, pointer: &str) -> Result<Opt
 }
 
 impl OutputSchema {
+    /// The value schema of this output's JSON root, for static pointer checks.
+    pub(crate) fn value_schema(&self) -> ValueSchema {
+        ValueSchema {
+            min_items: None,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: self.kind,
+            nullable: false,
+            items: self.items.clone(),
+            fields: self.fields.clone(),
+            required: self.required.clone(),
+            enum_values: self.enum_values.clone(),
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        }
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         for field in self.fields.values() {
             validate_min_items(field)?;

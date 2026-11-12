@@ -208,6 +208,14 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "check.pointer.unknown",
+        family: "validate",
+        meaning: "a literal `take` pointer names a field the producer's declared JSON output does not have",
+        example: "take text at \"/lable\" from verdict as label",
+        typical_fix: "Correct the pointer to a field declared by the producer's output schema.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "check.type_mismatch",
         family: "type",
         meaning: "statically known value types are incompatible at a use site",
@@ -3908,6 +3916,16 @@ fn collect_program_diagnostics(
         collect_duplicate_call_bindings(source, &definition.steps, line_starts, diagnostics);
         collect_program_input_diagnostics(source, &definition.steps, line_starts, diagnostics);
     }
+    collect_take_schema_diagnostics(source, &program.steps, registry, line_starts, diagnostics);
+    for definition in program.definitions.values() {
+        collect_take_schema_diagnostics(
+            source,
+            &definition.steps,
+            registry,
+            line_starts,
+            diagnostics,
+        );
+    }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
     if let Some(crate::ast::Trigger::Listen {
@@ -5818,6 +5836,217 @@ fn validate_call(
         line_starts,
         diagnostics,
     );
+}
+
+/// Check literal `take` pointers and types against the declared JSON output of the
+/// applet whose pipeline value is parsed (#477). `then parse json as NAME` reads the
+/// output of the most recent statement; when that statement is an applet call with
+/// a JSON-encoded output schema, the parsed NAME carries that schema. Open objects,
+/// unconstrained JSON, unknown producers and non-literal pointers are not checked.
+fn collect_take_schema_diagnostics(
+    source: &str,
+    steps: &[Step],
+    registry: &Registry,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut pipeline_schema: Option<ValueSchema> = None;
+    let mut parsed_schemas = BTreeMap::<String, ValueSchema>::new();
+    for step in steps {
+        let kind = &step.kind;
+        if let StepKind::TakeJson {
+            pointer,
+            source: Value::Reference(name),
+            kind: take_kind,
+            ..
+        } = kind
+        {
+            if let Some(schema) = parsed_schemas.get(name) {
+                check_take_pointer_schema(
+                    source,
+                    step.line,
+                    pointer,
+                    *take_kind,
+                    name,
+                    schema,
+                    line_starts,
+                    diagnostics,
+                );
+            }
+        }
+        for name in step_bound_names(kind) {
+            parsed_schemas.remove(name);
+        }
+        match kind {
+            StepKind::Invoke { call, .. } => {
+                pipeline_schema = registry
+                    .resolve_call(call)
+                    .ok()
+                    .and_then(json_output_schema);
+            }
+            StepKind::ParseJson { binding } => {
+                if let Some(schema) = pipeline_schema.take() {
+                    parsed_schemas.insert(binding.clone(), schema);
+                }
+            }
+            // Control markers and takes leave the pipeline value unchanged.
+            StepKind::Loop { .. }
+            | StepKind::EndLoop { .. }
+            | StepKind::If { .. }
+            | StepKind::Otherwise { .. }
+            | StepKind::EndIf
+            | StepKind::Try { .. }
+            | StepKind::Catch { .. }
+            | StepKind::Finally
+            | StepKind::EndTry
+            | StepKind::TakeJson { .. }
+            | StepKind::TakeJsonDynamic { .. } => {}
+            _ => pipeline_schema = None,
+        }
+    }
+}
+
+/// The JSON-encoded output schema of a resolved applet, as seen by `parse json`.
+fn json_output_schema(manifest: &Manifest) -> Option<ValueSchema> {
+    let contract = manifest.execution_contract()?;
+    let output = contract.output.as_ref()?;
+    if output.encoding != crate::contracts::OutputEncoding::Json {
+        return None;
+    }
+    Some(
+        contract
+            .result_envelope_schema()
+            .unwrap_or_else(|| output.value_schema()),
+    )
+}
+
+/// Names a statement binds. Only the forms that can rebind a parsed value are listed;
+/// others cannot shadow it.
+fn step_bound_names(kind: &StepKind) -> Vec<&str> {
+    match kind {
+        StepKind::Invoke { call, .. } | StepKind::CallProgram { call, .. } => call
+            .binding
+            .iter()
+            .chain(call.status_binding.iter())
+            .chain(call.result_binding.iter())
+            .map(String::as_str)
+            .collect(),
+        StepKind::ParseJson { binding }
+        | StepKind::TakeJson { binding, .. }
+        | StepKind::TakeJsonDynamic { binding, .. }
+        | StepKind::BindValue { binding, .. }
+        | StepKind::CaptureBytes { binding }
+        | StepKind::Catch { binding, .. } => vec![binding.as_str()],
+        StepKind::Read { binding, .. }
+        | StepKind::ReadStdin { binding }
+        | StepKind::ReadCallInput { binding } => binding.iter().map(String::as_str).collect(),
+        StepKind::Loop {
+            kind: crate::ast::LoopKind::ForEach { binding, .. },
+            ..
+        } => vec![binding.as_str()],
+        _ => Vec::new(),
+    }
+}
+
+/// Walk a literal JSON pointer through the declared schema. An undeclared field on a
+/// closed record is an error with a did-you-mean fix; a declared scalar must match
+/// the take type. Anything the schema does not constrain is left unchecked.
+#[allow(clippy::too_many_arguments)]
+fn check_take_pointer_schema(
+    source: &str,
+    line: usize,
+    pointer: &str,
+    take_kind: crate::ast::InputType,
+    producer: &str,
+    root: &ValueSchema,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Ok(segments) = crate::contracts::json_pointer_segments(pointer) else {
+        return;
+    };
+    let raw_parts = pointer.split('/').collect::<Vec<_>>();
+    let literal = format!("\"{pointer}\"");
+    let span = || {
+        find_phrase_span_at(source, line, &literal, line_starts)
+            .unwrap_or_else(|| line_starts.span(source, line))
+    };
+    let mut current = root;
+    for (index, segment) in segments.iter().enumerate() {
+        match current.kind {
+            OutputType::Json => return,
+            OutputType::Record => {
+                if let Some(next) = current
+                    .fields
+                    .get(segment)
+                    .or(current.additional_properties.as_deref())
+                {
+                    current = next;
+                    continue;
+                }
+                let fixes = suggest::closest(segment, current.fields.keys().map(String::as_str))
+                    .filter(|candidate| !candidate.contains(['/', '~']))
+                    .map(|candidate| {
+                        let mut parts = raw_parts.clone();
+                        if let Some(part) = parts.get_mut(index + 1) {
+                            *part = candidate;
+                        }
+                        SuggestedFix::replace(
+                            format!("use the declared field {candidate:?}"),
+                            span(),
+                            format!("\"{}\"", parts.join("/")),
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "check.pointer.unknown".into(),
+                    message: format!(
+                        "take {pointer:?} from {producer:?} names field {segment:?}, which the producer's declared output does not have"
+                    ),
+                    span: span(),
+                    fixes,
+                    related: Vec::new(),
+                });
+                return;
+            }
+            OutputType::List => {
+                let Some(item) = current.items.as_deref() else {
+                    return;
+                };
+                current = item;
+            }
+            _ => return,
+        }
+    }
+    let take_type = output_type_for_input(take_kind);
+    if matches!(take_type, OutputType::Bytes | OutputType::Json)
+        || take_type == current.kind
+        || (take_type == OutputType::Text && current.kind == OutputType::Path)
+        || (is_numeric_output_type(take_type) && is_numeric_output_type(current.kind))
+    {
+        return;
+    }
+    diagnostics.push(Diagnostic {
+        severity: DiagnosticSeverity::Error,
+        code: "check.type_mismatch".into(),
+        message: format!(
+            "take {} at {pointer:?} from {producer:?} conflicts with the producer's declared {} type",
+            output_type_name(take_type),
+            output_type_name(current.kind)
+        ),
+        span: span(),
+        fixes: Vec::new(),
+        related: Vec::new(),
+    });
+}
+
+fn is_numeric_output_type(kind: OutputType) -> bool {
+    matches!(
+        kind,
+        OutputType::Integer | OutputType::UnsignedInteger | OutputType::Usize | OutputType::Number
+    )
 }
 
 /// Check the selected JSON container only when both the operation dispatch and
@@ -8086,6 +8315,78 @@ mod tests {
             }),
             "loop-local typed take was not propagated: {diagnostics:#?}"
         );
+    }
+
+    fn classify_output_fixture() -> JsonValue {
+        json!({
+            "name": "fixture.classify",
+            "binary": "fixture-classify",
+            "parameters": {"question": {"type": "string", "required": true}},
+            "arguments": [{"literal": "classify"}, {"parameter": "question"}],
+            "contract": {
+                "version": 1,
+                "backend": "command",
+                "lifecycle": {"kind": "oneshot"},
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": {
+                        "label": {"type": "text"},
+                        "accepted": {"type": "boolean"},
+                        "meta": {"type": "record", "additionalProperties": {"type": "text"}}
+                    },
+                    "required": ["label", "accepted"]
+                },
+                "capabilities": ["network.loopback"],
+                "effects": ["network.loopback"]
+            }
+        })
+    }
+
+    fn take_schema_diagnostics(source: &str) -> Vec<Diagnostic> {
+        let registry = Registry::from_sources(&[classify_output_fixture().to_string()]).unwrap();
+        analyze_source(source, &registry)
+            .into_iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "check.pointer.unknown"
+                    || diagnostic.code == "check.type_mismatch"
+            })
+            .collect()
+    }
+
+    #[test]
+    fn take_pointer_missing_from_declared_output_fails_with_did_you_mean_fix() {
+        let source = "run fixture.classify with question \"Which team?\" as raw\nthen parse json as verdict\ntake text at \"/lable\" from verdict as label\n";
+        let diagnostics = take_schema_diagnostics(source);
+        let unknown = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "check.pointer.unknown")
+            .unwrap_or_else(|| panic!("typo pointer was not reported: {diagnostics:#?}"));
+        assert_eq!(unknown.span.line, 3);
+        assert_eq!(unknown.fixes.len(), 1, "{unknown:#?}");
+        assert_eq!(unknown.fixes[0].edits[0].replacement, "\"/label\"");
+    }
+
+    #[test]
+    fn take_type_contradicting_declared_output_is_a_type_error() {
+        let source = "run fixture.classify with question \"Which team?\" as raw\nthen parse json as verdict\ntake integer at \"/label\" from verdict as label\n";
+        let diagnostics = take_schema_diagnostics(source);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "check.type_mismatch"
+                    && diagnostic.span.line == 3
+                    && diagnostic.message.contains("integer")
+                    && diagnostic.message.contains("text")
+            }),
+            "integer take of a text field was not reported: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn take_matching_or_unconstrained_output_is_not_reported() {
+        let source = "run fixture.classify with question \"Which team?\" as raw\nthen parse json as verdict\ntake text at \"/label\" from verdict as label\ntake boolean at \"/accepted\" from verdict as accepted\ntake text at \"/meta/anything\" from verdict as note\n";
+        let diagnostics = take_schema_diagnostics(source);
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     }
 
     #[test]

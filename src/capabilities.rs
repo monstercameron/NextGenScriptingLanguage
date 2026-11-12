@@ -3816,6 +3816,116 @@ pub fn authorize_network_endpoint(
     Ok(())
 }
 
+/// Authorize one HTTP(S) request URL made by an in-process HTTP applet
+/// (`http.get`), before any connection to its origin. The rules match
+/// `authorize_network_endpoint` (grant, origin allowlist, by-name SSRF check,
+/// data-flow sink), but the applet has no remote-backend manifest, so the
+/// grant is looked up by `applet_name` alone. The caller runs this once for
+/// the request and once per redirect hop.
+///
+/// `allow_loopback` is true only for the loopback fixture switch. Returns
+/// whether this origin is listed explicitly in `network_origins`: only a
+/// listed origin preserves a non-public destination at connect time.
+/// Like the remote path, an absent policy approves the origin here while the
+/// connect-time SSRF guard still applies.
+pub fn authorize_http_origin(
+    registry: &Registry,
+    applet_name: &str,
+    url: &str,
+    allow_loopback: bool,
+    sensitivities: &SensitivitySet,
+) -> Result<bool> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
+        crate::security::authorize_data_flow_set(registry, applet_name, url, sensitivities)?;
+        return Ok(false);
+    };
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
+    if !grant.network || !grant.capabilities.contains("network.connect") {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::CapabilityNotGranted,
+        );
+        bail!("capability policy denies network access for applet {applet_name:?}");
+    }
+    let parsed = parse_http_url(url, "HTTP request URL")?;
+    if parsed.fragment {
+        bail!("HTTP request URL must not contain a fragment");
+    }
+    let origin = parsed.origin.clone();
+    let allowed = network_origin_is_granted(grant, &origin);
+    record_policy_decision(
+        registry,
+        applet_name,
+        "network.connect",
+        Some(&origin),
+        PolicyRisk::High,
+        if allowed {
+            PolicyDecisionOutcome::Approved
+        } else {
+            PolicyDecisionOutcome::Denied
+        },
+        if allowed {
+            PolicyDecisionReason::PolicyMatched
+        } else {
+            PolicyDecisionReason::NetworkOriginNotGranted
+        },
+    );
+    if !allowed {
+        bail!("capability policy denies the HTTP request origin {origin}");
+    }
+    let listed = grant.network_origins.contains(&origin);
+    let granted = if listed {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    if let Err(denied) = ssrf::check_endpoint_host(&parsed.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public HTTP request host: {denied}");
+    }
+    crate::security::authorize_data_flow_set(registry, applet_name, url, sensitivities)?;
+    Ok(listed)
+}
+
 /// Authorize a custom `@execute-model` endpoint against the same policy grants
 /// as a remote origin: the applet's `network_origins`, the data-flow sinks for
 /// the call's sensitivity, and the fail-closed SSRF guard.

@@ -78,7 +78,10 @@ explicitly includes unknown for that origin.
 
 This origin and label check applies to host-managed remote applet requests. A
 data-flow policy does not inspect or mediate network traffic opened directly by
-an arbitrary native child process. Without a data-flow policy, legacy
+an arbitrary native child process. The in-process HTTP GET request (`http.get`,
+in progress under #323) is checked through the same origin and label rules
+before each connection, including each redirect hop. It is not yet callable
+from a `.program`: its applet dispatch and manifest are still pending. Without a data-flow policy, legacy
 host-managed remote behavior is preserved. A capability policy alone does not
 authorize or constrain remote data labels; the CLI warns that remote egress
 and persistence are outside data-flow grants when only the capability policy

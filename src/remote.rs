@@ -1326,26 +1326,11 @@ impl RemoteClient {
     }
 
     fn agent(&self, timeout_ms: u64, cancelled: Arc<AtomicBool>) -> ureq::Agent {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_millis(timeout_ms)))
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .proxy(None);
-        let config = config.build();
-        let connector = ().chain(transport::InterruptibleTcpConnector::new(Arc::clone(
-            &cancelled,
-        )));
-        #[cfg(windows)]
-        let connector =
-            connector.chain(ureq::unversioned::transport::NativeTlsConnector::default());
-        #[cfg(unix)]
-        let connector = connector.chain(ureq::unversioned::transport::RustlsConnector::default());
-        ureq::Agent::with_parts(
-            config,
-            connector,
-            InterruptibleSystemResolver {
+        http_agent(
+            timeout_ms,
+            cancelled,
+            HttpAgentPolicy {
                 helper: self.resolver_helper.as_deref().cloned(),
-                cancelled,
                 process_observer: self.process_observer.clone(),
                 allow_loopback: self.config.allow_loopback_http_fixture,
                 granted_origin: self.ssrf_granted_origin,
@@ -1467,6 +1452,193 @@ impl RemoteClient {
         }
         Ok(response)
     }
+}
+
+/// Connect-time policy shared by every agent this module builds: the resolver
+/// helper, the optional launch observer, and the SSRF grants. Redirects and
+/// proxies are always disabled here.
+struct HttpAgentPolicy {
+    helper: Option<PathBuf>,
+    process_observer: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    allow_loopback: bool,
+    granted_origin: bool,
+}
+
+fn http_agent(timeout_ms: u64, cancelled: Arc<AtomicBool>, policy: HttpAgentPolicy) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_millis(timeout_ms)))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .proxy(None);
+    let config = config.build();
+    let connector = ().chain(transport::InterruptibleTcpConnector::new(Arc::clone(
+        &cancelled,
+    )));
+    #[cfg(windows)]
+    let connector = connector.chain(ureq::unversioned::transport::NativeTlsConnector::default());
+    #[cfg(unix)]
+    let connector = connector.chain(ureq::unversioned::transport::RustlsConnector::default());
+    ureq::Agent::with_parts(
+        config,
+        connector,
+        InterruptibleSystemResolver {
+            helper: policy.helper,
+            cancelled,
+            process_observer: policy.process_observer,
+            allow_loopback: policy.allow_loopback,
+            granted_origin: policy.granted_origin,
+        },
+    )
+}
+
+/// Options for the in-process `http.get` request.
+#[derive(Debug, Clone)]
+pub struct HttpGetOptions {
+    pub timeout_ms: u64,
+    /// Response body limit; clamped to the shared `DEFAULT_MAX_RESPONSE_BYTES`.
+    pub max_bytes: usize,
+    /// Redirect hops followed before the request fails; clamped to
+    /// `MAX_HTTP_REDIRECTS`. Each hop is authorized before it connects.
+    pub max_redirects: u8,
+    /// The loopback-fixture switch. Without it only `https` URLs are sent;
+    /// with it, plain `http` is also allowed, but only to a loopback host.
+    pub allow_loopback_http_fixture: bool,
+    /// Helper executable for hostname resolution (the CLI itself).
+    pub resolver_helper: Option<PathBuf>,
+}
+
+impl Default for HttpGetOptions {
+    fn default() -> Self {
+        Self {
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            max_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            max_redirects: DEFAULT_HTTP_REDIRECTS,
+            allow_loopback_http_fixture: false,
+            resolver_helper: None,
+        }
+    }
+}
+
+pub const DEFAULT_HTTP_REDIRECTS: u8 = 5;
+pub const MAX_HTTP_REDIRECTS: u8 = 10;
+
+/// A typed `http.get` result. Status codes other than redirects are returned
+/// as data; the caller decides what a 4xx or 5xx means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Send a GET request to `url`. `authorize` runs before any connection to a
+/// URL's origin, once for the request and once per redirect hop. It receives
+/// the URL and returns whether its origin is explicitly granted (listed), and
+/// refuses the hop by returning an error. Redirects are followed manually so
+/// that every hop passes through `authorize`.
+pub fn http_get(
+    url: &str,
+    options: &HttpGetOptions,
+    authorize: &dyn Fn(&str) -> Result<bool, RemoteError>,
+) -> Result<HttpResponse, RemoteError> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let timeout_ms = options.timeout_ms.clamp(1, MAX_TIMEOUT_MS);
+    let max_bytes = options.max_bytes.min(DEFAULT_MAX_RESPONSE_BYTES);
+    let max_redirects = options.max_redirects.min(MAX_HTTP_REDIRECTS);
+    let mut current = parse_http_get_url(url, options.allow_loopback_http_fixture)?;
+    let mut hops = 0_u8;
+    loop {
+        let granted = authorize(current.as_str())?;
+        let response = send_http_get(&current, &cancelled, timeout_ms, options, granted)?;
+        let status = response.status().as_u16();
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let redirect = matches!(status, 301 | 302 | 303 | 307 | 308);
+        if let (true, Some(location)) = (redirect, location) {
+            if hops >= max_redirects {
+                return Err(RemoteError::new(
+                    RemoteErrorKind::InvalidResponse,
+                    EffectCertainty::NotStarted,
+                ));
+            }
+            hops += 1;
+            let next = current.join(&location).map_err(|_| {
+                RemoteError::new(
+                    RemoteErrorKind::InvalidResponse,
+                    EffectCertainty::NotStarted,
+                )
+            })?;
+            current = parse_http_get_url(next.as_str(), options.allow_loopback_http_fixture)?;
+            continue;
+        }
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_owned(),
+                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                )
+            })
+            .collect();
+        let mut body = response.into_body();
+        let bytes = read_bounded(
+            body.as_reader(),
+            max_bytes,
+            &cancelled,
+            EffectCertainty::NotStarted,
+        )?;
+        return Ok(HttpResponse {
+            status,
+            headers,
+            body: bytes,
+        });
+    }
+}
+
+/// Validate an `http.get` URL before any policy or network step: no embedded
+/// credentials, and `https` unless the loopback-fixture switch is set and the
+/// host is loopback.
+fn parse_http_get_url(value: &str, allow_loopback_http: bool) -> Result<Url, RemoteError> {
+    let invalid = || RemoteError::new(RemoteErrorKind::InvalidRequest, EffectCertainty::NotStarted);
+    let parsed = Url::parse(value).map_err(|_| invalid())?;
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host().is_none() {
+        return Err(invalid());
+    }
+    let loopback_http =
+        parsed.scheme() == "http" && allow_loopback_http && parsed.host().is_some_and(is_loopback);
+    if parsed.scheme() != "https" && !loopback_http {
+        return Err(invalid());
+    }
+    Ok(parsed)
+}
+
+fn send_http_get(
+    url: &Url,
+    cancelled: &Arc<AtomicBool>,
+    timeout_ms: u64,
+    options: &HttpGetOptions,
+    granted_origin: bool,
+) -> Result<ureq::http::Response<ureq::Body>, RemoteError> {
+    let agent = http_agent(
+        timeout_ms,
+        Arc::clone(cancelled),
+        HttpAgentPolicy {
+            helper: options.resolver_helper.clone(),
+            process_observer: None,
+            allow_loopback: options.allow_loopback_http_fixture,
+            granted_origin,
+        },
+    );
+    check_cancel(cancelled, EffectCertainty::NotStarted)?;
+    agent
+        .get(url.as_str())
+        .header("Accept", "*/*")
+        .call()
+        .map_err(|error| map_ureq_error(error, EffectCertainty::NotStarted, cancelled))
 }
 
 /// One decoded event from a remote event port. Delivery is at-least-once:

@@ -1459,6 +1459,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     #[cfg(feature = "screens")]
     if flow::ui::syntax::is_screen(&source) {
         reject_finite_only_options(&args, "screen")?;
+        reject_events_option(&args, "screen")?;
         if args.missed_ticks.is_some()
             || args.max_catch_up.is_some()
             || args.calendar_dedup.is_some()
@@ -1599,6 +1600,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     if flow::stream::is_stream(&source) {
         flow::security::install_panic_hook("stream", None);
         reject_finite_only_options(&args, "stream")?;
+        reject_events_option(&args, "stream")?;
         let stream = flow::stream::parse(&source).context("parsing stream")?;
         let inputs = flow::inputs::parse_cli_arguments(
             &stream.pipeline.inputs,
@@ -1732,6 +1734,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             _ => unreachable!("argument parser only accepts supported commands"),
         };
     }
+    reject_events_option(&args, "finite")?;
     if args.headless {
         bail!("--headless applies only to UI programs");
     }
@@ -2368,6 +2371,16 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     }
     if args.answers.is_some() {
         bail!("--answers applies only to finite programs, not {program_kind} programs");
+    }
+    Ok(())
+}
+
+/// `--events` selects graph terminal-event rendering only. Refuse it on finite, screen,
+/// and stream programs before any effect runs, rather than printing ordinary output the
+/// caller did not ask for.
+fn reject_events_option(args: &Args, program_kind: &str) -> Result<()> {
+    if args.events.is_some() {
+        bail!("--events applies only to graph programs, not {program_kind} programs");
     }
     Ok(())
 }

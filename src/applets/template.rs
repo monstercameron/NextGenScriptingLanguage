@@ -69,8 +69,10 @@ fn render_inner(
         work += 1;
         let (before, from_brace) = rest.split_at(start);
         output.push_str(before);
+        check_size(output.len())?;
         if let Some(tail) = from_brace.strip_prefix("{{{{") {
             output.push_str("{{");
+            check_size(output.len())?;
             rest = tail;
         } else {
             let body = &from_brace[2..];
@@ -89,7 +91,6 @@ fn render_inner(
             push_value(&mut output, name, value, escape)?;
             rest = &body[close + 2..];
         }
-        check_size(output.len() + rest.len())?;
     }
     output.push_str(rest);
     check_size(output.len())?;
@@ -228,5 +229,75 @@ mod tests {
             let encoded = percent_encode(input).unwrap();
             assert_eq!(encoded.capacity(), encoded.len());
         }
+    }
+
+    fn args(
+        template: &str,
+        values: Map<String, Value>,
+        escape: Option<&str>,
+    ) -> Map<String, Value> {
+        let mut args = Map::new();
+        args.insert("template".to_owned(), Value::String(template.to_owned()));
+        args.insert("values".to_owned(), Value::Object(values));
+        if let Some(mode) = escape {
+            args.insert("escape".to_owned(), Value::String(mode.to_owned()));
+        }
+        args
+    }
+
+    #[test]
+    fn unexpanded_placeholders_do_not_count_toward_the_output_limit() {
+        let large = "a".repeat(14_800 * 1024);
+        let template = format!("{{{{large}}}}{}", "{{e}}".repeat(280_000));
+        let mut values = Map::new();
+        values.insert("large".to_owned(), Value::String(large.clone()));
+        values.insert("e".to_owned(), Value::String(String::new()));
+        let context = ExecutionContext::unrestricted();
+
+        let rendered = render(
+            &args(&template, values.clone(), None),
+            Path::new("."),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(rendered, Value::String(large.clone()));
+
+        let formatted = format(&args(&template, values, Some("plain")), &context).unwrap();
+        assert_eq!(formatted, Value::String(large));
+    }
+
+    #[test]
+    fn escaped_empty_placeholders_do_not_count_toward_the_output_limit() {
+        let large = "a".repeat(14_800 * 1024);
+        let template = format!("{{{{large}}}}{}", "{{e}}".repeat(280_000));
+        let mut values = Map::new();
+        values.insert("large".to_owned(), Value::String(large.clone()));
+        values.insert("e".to_owned(), Value::String(String::new()));
+        let context = ExecutionContext::unrestricted();
+
+        let formatted = format(&args(&template, values, Some("json")), &context).unwrap();
+        assert_eq!(formatted, Value::String(large));
+    }
+
+    #[test]
+    fn real_output_over_the_limit_is_still_rejected() {
+        let over = "a".repeat(MAX_TEMPLATE_BYTES);
+        let mut values = Map::new();
+        values.insert("v".to_owned(), Value::String(over));
+        values.insert("e".to_owned(), Value::String(String::new()));
+        let context = ExecutionContext::unrestricted();
+
+        assert!(render(
+            &args("{{v}}z", values.clone(), None),
+            Path::new("."),
+            &context
+        )
+        .is_err());
+        assert!(format(
+            &args("{{v}}{{e}}z", values.clone(), Some("plain")),
+            &context
+        )
+        .is_err());
+        assert!(format(&args("{{v}}z", values, Some("json")), &context).is_err());
     }
 }

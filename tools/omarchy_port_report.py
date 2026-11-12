@@ -6,8 +6,10 @@ double and ANSI quotes; backslash escapes; `$(...)`, backticks and `${...}`
 nesting; here-documents with their bodies; process substitution; `((...))`;
 array assignments; and `[[ ... ]]` conditions. A light parser then attributes
 features to commands. It is not a complete Bash parser: `case` patterns inside a
-`$(...)` with unbalanced parentheses are approximated, and case patterns are
-seen as command names. Standard library only.
+`$(...)` with unbalanced parentheses are approximated. Scripts with a non-shell
+shebang (for example Python) are not lexed; they are reported as out of scope.
+Functions defined in a script are not reported as external commands. Standard
+library only.
 
 Inputs:
   --inventory  the pinned inventory (docs/omarchy-inventory.json)
@@ -96,6 +98,7 @@ COMMAND_SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")"}
 COMMAND_OPENERS = {"then", "do", "else", "elif", "if", "while", "until", "!", "{", "time"}
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+SHELL_INTERPRETERS = {"bash", "sh", "dash", "ash"}
 
 
 class LexError(Exception):
@@ -425,6 +428,9 @@ def analyze_source(source: str) -> dict:
             note("pipeline", tok.line, "|")
 
     commands: list[dict] = []
+    functions: set[str] = set()
+    # One entry per open `case`: "subject" before `in`, "pattern" for labels, "body" for commands.
+    case_states: list[str] = []
     command_start = True
     index = 0
     n = len(tokens)
@@ -435,6 +441,10 @@ def analyze_source(source: str) -> dict:
             index += 1
             continue
         if tok.kind == "OP":
+            if case_states and case_states[-1] == "pattern" and tok.text == ")":
+                case_states[-1] = "body"
+            elif case_states and case_states[-1] == "body" and tok.text == ";;":
+                case_states[-1] = "pattern"
             command_start = tok.text in COMMAND_SEPARATORS
             index += 1
             continue
@@ -443,8 +453,19 @@ def analyze_source(source: str) -> dict:
             index += 1
             continue
         word = tok.text
+        if case_states and case_states[-1] == "subject" and word == "in":
+            case_states[-1] = "pattern"
+            command_start = True
+            index += 1
+            continue
+        if case_states and case_states[-1] == "pattern" and command_start and word != "esac":
+            # A case label such as `start|on)` or `*)` is a pattern, not a command.
+            index += 1
+            continue
         if command_start and word in ("if", "elif", "while", "until", "case"):
             note("conditional" if word in ("if", "elif", "case") else "loop", tok.line, word)
+            if word == "case":
+                case_states.append("subject")
             command_start = word != "case"
             index += 1
             continue
@@ -465,6 +486,8 @@ def analyze_source(source: str) -> dict:
             continue
         if command_start and word == "function":
             note("function_definition", tok.line, "function keyword")
+            if index + 1 < n and tokens[index + 1].kind == "WORD":
+                functions.add(tokens[index + 1].text)
             command_start = False
             index += 1
             continue
@@ -479,6 +502,8 @@ def analyze_source(source: str) -> dict:
             index += 1
             continue
         if command_start and word in ("esac", "in", "fi", "done", "}"):
+            if word == "esac" and case_states:
+                case_states.pop()
             command_start = word in ("in", "}")
             index += 1
             continue
@@ -492,6 +517,7 @@ def analyze_source(source: str) -> dict:
             and NAME.fullmatch(word)
         ):
             note("function_definition", tok.line, word)
+            functions.add(word)
             index += 3
             command_start = True
             continue
@@ -521,7 +547,8 @@ def analyze_source(source: str) -> dict:
         index += 1
 
     external = sorted({c["name"] for c in commands
-                       if c["name"] not in SHELL_BUILTIN_FEATURES and c["name"] not in NON_EXTERNAL})
+                       if c["name"] not in SHELL_BUILTIN_FEATURES and c["name"] not in NON_EXTERNAL
+                       and c["name"] not in functions})
     categories = {"unsupported": 0, "partial": 0, "supported": 0}
     for item in features:
         categories[FEATURES[item["feature"]][0]] += 1
@@ -536,8 +563,23 @@ def analyze_source(source: str) -> dict:
         "counts": categories,
         "features": features,
         "feature_names": sorted({item["feature"] for item in features}),
+        "functions": sorted(functions),
         "external_commands": external,
     }
+
+
+def shebang_interpreter(source: str) -> str | None:
+    """Return the interpreter named on the first line, or None when there is no shebang."""
+    first = source.split("\n", 1)[0]
+    if not first.startswith("#!"):
+        return None
+    words = first[2:].split()
+    if not words:
+        return None
+    interpreter = os.path.basename(words[0])
+    if interpreter == "env" and len(words) > 1:
+        interpreter = os.path.basename(words[1])
+    return interpreter
 
 
 def manifest_binaries(manifest_dir: str) -> set[str]:
@@ -573,9 +615,24 @@ def analyze_file(path: str, expected_sha: str | None, manifests: set[str]) -> di
         "line_endings": "crlf_normalized" if crlf else "lf",
         "lines": source.count("\n") + (0 if source.endswith("\n") or not source else 1),
     }
+    interpreter = shebang_interpreter(source)
+    if interpreter is not None and interpreter not in SHELL_INTERPRETERS:
+        # Not shell: the Bash lexer would read Python tokens as commands, so skip it.
+        result.update({
+            "analysis": "not_shell",
+            "language": "python" if interpreter.startswith("python") else interpreter,
+            "verdict": "out_of_scope",
+            "counts": {},
+            "features": [],
+            "feature_names": [],
+            "functions": [],
+            "external_commands": [],
+        })
+        return result
     try:
         result.update(analyze_source(source))
         result["analysis"] = "lexed"
+        result["language"] = "shell"
     except LexError as error:
         result.update({
             "analysis": "lex_error",
@@ -627,10 +684,18 @@ def build_report(args: argparse.Namespace) -> dict:
 
     verdicts = {"portable": 0, "partial": 0, "blocked": 0}
     feature_scripts: dict[str, int] = {}
+    command_scripts: dict[str, int] = {}
     for item in scripts.values():
         verdicts[item["verdict"]] = verdicts.get(item["verdict"], 0) + 1
         for feature in item.get("feature_names", []):
             feature_scripts[feature] = feature_scripts.get(feature, 0) + 1
+        for command in item.get("external_commands", []):
+            command_scripts[command["name"]] = command_scripts.get(command["name"], 0) + 1
+    # Ranked by how many scripts call each external command: the applet demand order.
+    command_ranking = [
+        {"name": name, "scripts": count, "manifest": name in manifests}
+        for name, count in sorted(command_scripts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
     analyzed_inventory = sum(1 for row in rows if row["status"] == "analyzed")
     return {
@@ -648,6 +713,7 @@ def build_report(args: argparse.Namespace) -> dict:
             "extra_sources": sum(1 for item in scripts.values() if not item["in_inventory"]),
         },
         "verdicts": verdicts,
+        "external_command_ranking": command_ranking,
         "feature_scripts": dict(sorted(feature_scripts.items())),
         "feature_categories": {name: FEATURES[name][0] for name in sorted(FEATURES)},
         "scripts": dict(sorted(scripts.items())),

@@ -104,5 +104,53 @@ class FileAnalysisTests(unittest.TestCase):
             self.assertEqual(data["scripts"]["bin/omarchy-launch-nautilus"]["verdict"], "partial")
 
 
+class ExternalCommandTests(unittest.TestCase):
+    def test_function_call_is_not_an_external_command(self):
+        source = "usage() {\n  ls\n}\nusage\nfunction helper {\n  true\n}\nhelper\n"
+        result = report.analyze_source(source)
+        self.assertEqual(result["external_commands"], ["ls"])
+        self.assertEqual(result["functions"], ["helper", "usage"])
+
+    def test_case_labels_are_not_external_commands(self):
+        source = (
+            'case "$1" in\n'
+            "  start|on) systemctl start x ;;\n"
+            "  --clear) rm -f y ;;\n"
+            "  *) cat z ;;\n"
+            "esac\n"
+        )
+        result = report.analyze_source(source)
+        self.assertEqual(result["external_commands"], ["cat", "rm", "systemctl"])
+
+    def test_python_script_is_not_lexed_as_bash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "helper")
+            with open(path, "wb") as handle:
+                handle.write(b"#!/usr/bin/python3\ndef main():\n    import json\n    print(json.dumps({}))\n")
+            result = report.analyze_file(path, None, set())
+            self.assertEqual(result["language"], "python")
+            self.assertEqual(result["analysis"], "not_shell")
+            self.assertEqual(result["verdict"], "out_of_scope")
+            self.assertEqual(result["external_commands"], [])
+
+    def test_aggregate_ranking_has_no_function_label_or_python_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = os.path.join(directory, "bin")
+            os.mkdir(bin_dir)
+            with open(os.path.join(bin_dir, "tool"), "wb") as handle:
+                handle.write(b"usage() { ls; }\ncase \"$1\" in\n  fail) cat x ;;\n  *) usage ;;\nesac\n")
+            with open(os.path.join(bin_dir, "helper"), "wb") as handle:
+                handle.write(b"#!/usr/bin/python3\ndef main():\n    import json\n")
+            out = os.path.join(directory, "report.json")
+            manifests = os.path.join(directory, "manifests")
+            os.mkdir(manifests)
+            self.assertEqual(report.main(["--fixtures", bin_dir, "--manifests", manifests, "--json", out]), 0)
+            with open(out, encoding="utf-8") as handle:
+                data = json.load(handle)
+            names = [entry["name"] for entry in data["external_command_ranking"]]
+            self.assertEqual(names, ["cat", "ls"])
+            self.assertEqual(data["verdicts"]["out_of_scope"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

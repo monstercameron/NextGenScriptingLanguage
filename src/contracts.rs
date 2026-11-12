@@ -333,7 +333,9 @@ impl ProgramModule {
         }
         if let Some(pin) = &self.package_lock_sha256 {
             if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                bail!("program module package_lock_sha256 must be a 64-character SHA-256 hex digest");
+                bail!(
+                    "program module package_lock_sha256 must be a 64-character SHA-256 hex digest"
+                );
             }
         }
         if self.package_lock_sha256.is_some() && self.package_manifest.is_none() {

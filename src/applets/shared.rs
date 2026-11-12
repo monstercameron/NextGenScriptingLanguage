@@ -434,8 +434,7 @@ unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
                 _mm256_cmpeq_epi8(values, backslash),
             );
             quote_bs += _mm256_movemask_epi8(is_quote_bs).count_ones() as usize;
-            let is_ctrl =
-                _mm256_cmpeq_epi8(_mm256_max_epu8(values, ctrl_ceiling), ctrl_ceiling);
+            let is_ctrl = _mm256_cmpeq_epi8(_mm256_max_epu8(values, ctrl_ceiling), ctrl_ceiling);
             ctrl += _mm256_movemask_epi8(is_ctrl).count_ones() as usize;
             let mut is_short = _mm256_cmpeq_epi8(values, short[0]);
             for target in &short[1..] {

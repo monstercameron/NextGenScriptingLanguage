@@ -3164,8 +3164,7 @@ mod tests {
         );
         let loaded = load_program_module_package(&manifest_path, &root, None).unwrap();
         let lock_path = root.join("program.modules.lock.json");
-        let lock_bytes =
-            serde_json::to_vec_pretty(&loaded.lock_snapshot(&root).unwrap()).unwrap();
+        let lock_bytes = serde_json::to_vec_pretty(&loaded.lock_snapshot(&root).unwrap()).unwrap();
         fs::write(&lock_path, &lock_bytes).unwrap();
         let applet_manifest_path = root.join("applet.json");
         fs::write(&applet_manifest_path, "{}").unwrap();
@@ -3230,17 +3229,17 @@ mod tests {
         let Some(home) = home else {
             return;
         };
-        let error =
-            load_program_module_package(Path::new("nonexistent.json"), &home, None)
-                .unwrap_err()
-                .to_string();
+        let error = load_program_module_package(Path::new("nonexistent.json"), &home, None)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("home directory"), "{error}");
 
         // A dedicated directory keeps loading.
         let temp = tempdir().unwrap();
         assert!(reject_overly_broad_module_root(temp.path()).is_ok());
-        assert!(reject_overly_broad_module_root(Path::new("/definitely-not-a-module-root"))
-            .is_ok());
+        assert!(
+            reject_overly_broad_module_root(Path::new("/definitely-not-a-module-root")).is_ok()
+        );
     }
 
     #[cfg(windows)]

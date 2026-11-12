@@ -3261,15 +3261,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 // The capture moves into the record and is
                                 // taken back afterwards, so the pipeline keeps
                                 // its single owned buffer instead of cloning it.
-                                let mut execution =
-                                    execution_result::ExecutionResult::from_outcome(
-                                        outcome,
-                                        reported_stdout_captured
-                                            .then(|| std::mem::take(&mut bytes)),
-                                        stderr.map(<[u8]>::to_vec),
-                                        output_value,
-                                        stages.clone(),
-                                    );
+                                let mut execution = execution_result::ExecutionResult::from_outcome(
+                                    outcome,
+                                    reported_stdout_captured.then(|| std::mem::take(&mut bytes)),
+                                    stderr.map(<[u8]>::to_vec),
+                                    output_value,
+                                    stages.clone(),
+                                );
                                 let record = execution.to_source_value(line, applet);
                                 bindings.insert(name.clone(), record);
                                 if reported_stdout_captured {
@@ -3873,10 +3871,7 @@ mod result_record_capture_tests {
         let encoded = run(&format!("{invocation}then encode execution as json\n")).output;
         let record: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(record["stdout_captured"], serde_json::Value::Bool(true));
-        assert_eq!(
-            record["stdout_bytes"].as_u64(),
-            Some(expected.len() as u64)
-        );
+        assert_eq!(record["stdout_bytes"].as_u64(), Some(expected.len() as u64));
         assert_eq!(
             serde_json::to_vec(&record["stdout"]).unwrap(),
             serde_json::to_vec(&expected).unwrap()

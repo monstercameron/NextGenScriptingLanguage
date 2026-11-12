@@ -447,9 +447,7 @@ impl LoopStack {
     /// learn the same way, keeping the previous full-scan behavior until
     /// equivalence holds.
     fn remove_frame_locals(frame: &mut Frame, bindings: &mut BTreeMap<String, Value>) {
-        let Frame {
-            outer, locals, ..
-        } = frame;
+        let Frame { outer, locals, .. } = frame;
         if let Some(locals) = locals.as_deref() {
             for name in locals {
                 bindings.remove(name);

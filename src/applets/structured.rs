@@ -1324,7 +1324,7 @@ mod tests {
     /// lengths around the vector threshold and the block sizes.
     #[test]
     fn escaped_length_vector_path_matches_scalar_and_serde_json() {
-        use super::super::shared::{ESCAPE_VECTOR_THRESHOLD, escape_extra_vector};
+        use super::super::shared::{escape_extra_vector, ESCAPE_VECTOR_THRESHOLD};
 
         fn scalar_extra(bytes: &[u8]) -> usize {
             bytes

@@ -7181,8 +7181,9 @@ mod execution_plan_tests {
     fn validated_plan_matches_direct_run_across_repeated_runs() {
         let directory = tempfile::tempdir().expect("temporary plan directory");
         let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
-        let program = crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
-            .expect("valid value program");
+        let program =
+            crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
+                .expect("valid value program");
         let options = plan_options(&directory);
 
         let direct = run(&program, &registry, &options).expect("direct run");
@@ -7190,7 +7191,10 @@ mod execution_plan_tests {
         assert_eq!(plan.program(), &program);
         let first = plan.run(&registry, &options).expect("first planned run");
         let second = plan.run(&registry, &options).expect("second planned run");
-        assert!(!direct.output.is_empty(), "fixture program must emit output");
+        assert!(
+            !direct.output.is_empty(),
+            "fixture program must emit output"
+        );
         assert_eq!(first.output, direct.output);
         assert_eq!(second.output, direct.output);
     }
@@ -7227,8 +7231,9 @@ mod execution_plan_tests {
     fn validated_plan_refuses_a_changed_registry() {
         let directory = tempfile::tempdir().expect("temporary plan directory");
         let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
-        let program = crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
-            .expect("valid value program");
+        let program =
+            crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
+                .expect("valid value program");
         let plan = ExecutionPlan::prepare(&program, &registry).expect("prepare plan");
         plan.check(&registry).expect("same registry still matches");
 
@@ -7248,8 +7253,7 @@ mod execution_plan_tests {
     fn validated_plan_prepare_reports_the_same_diagnostic_as_run() {
         let directory = tempfile::tempdir().expect("temporary plan directory");
         let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
-        let program =
-            crate::parser::parse("run missing.applet\n").expect("parseable unknown call");
+        let program = crate::parser::parse("run missing.applet\n").expect("parseable unknown call");
         let options = plan_options(&directory);
         let run_error = match run(&program, &registry, &options) {
             Ok(_) => panic!("unknown applets must fail the run"),

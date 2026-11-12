@@ -8,7 +8,7 @@ use super::*;
 use crate::ast::{Invocation, JobStage, Value};
 use crate::contracts::AppletBackend;
 use crate::manifest::Manifest;
-use crate::tasks::{CancellationWake, TaskHandle, TaskScope};
+use crate::tasks::{CancellationWake, TaskDeadlineExceeded, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1078,11 +1078,7 @@ impl Supervisor {
             .context("background job worker handle is missing")?;
         let result = match self.tasks.join_until(handle, deadline) {
             Ok(result) => result,
-            Err(error) => execution_result::ExecutionResult::runtime_failure(
-                execution_result::ExecutionKind::UnknownError,
-                format!("background job worker failed: {error:#}"),
-                execution_result::EffectCertainty::Uncertain,
-            ),
+            Err(error) => join_error_result(error),
         };
         if let Some(job) = self.jobs.get_mut(key) {
             job.terminal = Some(result.clone());
@@ -1091,6 +1087,49 @@ impl Supervisor {
             }
         }
         Ok(result)
+    }
+}
+
+/// Classify a failed join of a background job worker. An expired await
+/// deadline is a timeout; any other join error is an unexpected worker failure.
+/// Both keep uncertain effect certainty because the job may already have run.
+fn join_error_result(error: anyhow::Error) -> execution_result::ExecutionResult {
+    if error.is::<TaskDeadlineExceeded>() {
+        return execution_result::ExecutionResult::runtime_failure(
+            execution_result::ExecutionKind::Timeout,
+            "background job deadline exceeded; external effects may be uncertain",
+            execution_result::EffectCertainty::Uncertain,
+        );
+    }
+    execution_result::ExecutionResult::runtime_failure(
+        execution_result::ExecutionKind::UnknownError,
+        format!("background job worker failed: {error:#}"),
+        execution_result::EffectCertainty::Uncertain,
+    )
+}
+
+#[cfg(test)]
+mod join_error_tests {
+    use super::*;
+
+    #[test]
+    fn deadline_join_error_maps_to_timeout_with_uncertain_effects() {
+        let result = join_error_result(TaskDeadlineExceeded.into());
+        assert_eq!(result.kind, execution_result::ExecutionKind::Timeout);
+        assert_eq!(
+            result.effect_certainty,
+            execution_result::EffectCertainty::Uncertain
+        );
+    }
+
+    #[test]
+    fn unexpected_worker_failure_stays_unknown_error() {
+        let result = join_error_result(anyhow!("task worker panicked: boom"));
+        assert_eq!(result.kind, execution_result::ExecutionKind::UnknownError);
+        assert_eq!(
+            result.effect_certainty,
+            execution_result::EffectCertainty::Uncertain
+        );
     }
 }
 

@@ -392,7 +392,7 @@ impl TaskScope {
                     self.cancel();
                     let _ = receiver.recv();
                     let _ = self.reap(handle.id);
-                    bail!("task group deadline exceeded; external effects may be uncertain")
+                    return Err(TaskDeadlineExceeded.into());
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     Err(anyhow!("task worker exited without a result"))
@@ -499,6 +499,19 @@ impl Drop for TaskScope {
     }
 }
 
+/// The caller's total deadline expired while it awaited a task. The task was
+/// cancelled and reaped, and it may already have started external effects.
+#[derive(Debug)]
+pub(crate) struct TaskDeadlineExceeded;
+
+impl std::fmt::Display for TaskDeadlineExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("task group deadline exceeded; external effects may be uncertain")
+    }
+}
+
+impl std::error::Error for TaskDeadlineExceeded {}
+
 fn task_panic(payload: Box<dyn Any + Send>) -> anyhow::Error {
     let message = payload
         .downcast_ref::<&str>()
@@ -506,6 +519,41 @@ fn task_panic(payload: Box<dyn Any + Send>) -> anyhow::Error {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("non-string panic payload");
     anyhow!("task worker panicked: {message}")
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn expired_await_deadline_on_blocked_task_is_typed() -> Result<()> {
+        let mut scope = TaskScope::new(1, None)?;
+        let handle = scope.spawn(|token| {
+            while !token.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(())
+        })?;
+        let error = scope
+            .join_until(handle, Some(Instant::now()))
+            .expect_err("a blocked task must not finish before the deadline");
+        assert!(error.is::<TaskDeadlineExceeded>());
+        Ok(())
+    }
+
+    #[test]
+    fn unexpected_task_failure_is_not_a_deadline() -> Result<()> {
+        let mut scope = TaskScope::new(1, None)?;
+        let handle = scope.spawn(|_| -> Result<()> { bail!("worker broke") })?;
+        let error = scope
+            .join_until(
+                handle,
+                Some(Instant::now() + std::time::Duration::from_secs(10)),
+            )
+            .expect_err("worker failure must propagate");
+        assert!(!error.is::<TaskDeadlineExceeded>());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

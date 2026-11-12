@@ -488,8 +488,11 @@ universal speed advantage or full Bash parity.
 Execute targets Unix glue programs on macOS and Linux, with a native Windows port on
 x64 and ARM64. Current `main` is version `0.9.0-rc.5`. The latest published release is
 the multi-platform candidate [`0.9.0-rc.4`](https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4)
-(tag `v0.9.0-rc.4`); `0.9.0-rc.5` has no tag and no release yet, so everything added
-since rc.4 requires a source build. The retained `bin/execute` is historical 0.8.0.
+(tag `v0.9.0-rc.4`). `0.9.0-rc.5` has no tag and no release yet, and no published
+package includes the features added after rc.4. Until a release includes them, those
+features need a source build (see Quickstart). No release cadence is stated; see
+[release cadence and channels](docs/releases.md#cadence-and-channels). The retained
+`bin/execute` is historical 0.8.0.
 [Version history](CHANGELOG.md) separates published releases from unreleased work,
 and [release validation](docs/releases.md) records what each package set passed.
 

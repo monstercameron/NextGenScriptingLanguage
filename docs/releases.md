@@ -163,6 +163,50 @@ Upgrades and compatibility:
 - No upgrade or downgrade test runs in CI yet. The version rules above come from
   the source; they have not been exercised across published packages.
 
+## Cadence and channels
+
+No release cadence is stated. The repository sets no schedule and no rule for
+how often release candidates are cut. Tags are the only release trigger:
+`.github/workflows/release.yml` runs on a pushed `v*` tag and on manual
+dispatch, and a manual dispatch must select an existing tag.
+
+Current state, as of this section's last edit:
+
+- `main` is `0.9.0-rc.5` (`Cargo.toml`) and has no tag.
+- `v0.9.0-rc.4` (2026-10-14) is the only published release. Tags `v0.9.0-rc.1`
+  through `v0.9.0-rc.3` exist, but their draft releases were cleaned up (see
+  [Maintainer workflow](#maintainer-workflow)).
+- About 1,556 commits lie between `v0.9.0-rc.4` and `main`, and the
+  `Unreleased` section of [CHANGELOG.md](../CHANGELOG.md) has 74 entries.
+
+Channels that exist today:
+
+- **Tagged releases.** Published on GitHub Releases after the workflow's
+  checks, package builds and signing steps pass (see
+  [Maintainer workflow](#maintainer-workflow)).
+- **Package validation.** The `packages.yml` workflow can be started by hand to
+  build the packages for a chosen ref. Its output is workflow run artifacts,
+  not a release.
+- **Nightly checks.** Several workflows run on a schedule (fuzzing, sanitizers,
+  crash consistency, soak, flaky-test detection). They test the code and publish
+  no installable build. [CONTRIBUTING.md](../CONTRIBUTING.md#continuous-integration-and-nightly-checks)
+  lists them.
+
+No nightly build channel exists. A proposal to publish unsigned nightly builds
+from a green `main`, and to cut a release candidate every two weeks while the
+project is pre-1.0, has not been adopted. Treat it as a proposal only.
+
+Gate: in `release.yml`, the `checks` job calls the reusable native checks in
+`ci.yml`, `build` needs `checks` and calls `packages.yml`, and `publish` needs
+`build`. A failing check stops publication. The AUR templates under
+`packaging/aur/` point at the existing tag `v0.9.0-rc.4`; `tools/aur.py`
+renders their version and checksums.
+
+Exit criteria: none are stated. The move from release candidate to `0.9.0`,
+and from `0.9.0` to `1.0`, has no written criteria in the repository.
+[docs/stability.md](stability.md) records which compatibility decisions are
+still open before 1.0. It does not set release criteria.
+
 ## Maintainer workflow
 
 `Cargo.toml` is the canonical runtime version; root `Cargo.lock` and the

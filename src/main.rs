@@ -2221,8 +2221,21 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &std::sync::atomic::AtomicBool::new(false),
                         None,
                     )?;
-                    record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
-                        .map_err(|error| redact_runtime_error(&registry, error))?
+                    record_cli::run_recorded(
+                        directory,
+                        &args.file,
+                        &program,
+                        &registry,
+                        &options,
+                        flow::record::RecordProvenance {
+                            capability_policy_path: args.capability_policy.as_deref(),
+                            data_flow_policy_path: args.data_flow_policy.as_deref(),
+                            program_arguments: &args.program_arguments,
+                            allow: &args.allow,
+                            what_if_fingerprint: args.confirm.as_deref(),
+                        },
+                    )
+                    .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
                     // Uncaptured stdout streams to this terminal as it is produced.
                     runtime::with_streamed_stdout(|| {

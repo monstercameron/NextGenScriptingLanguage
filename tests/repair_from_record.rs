@@ -1103,6 +1103,14 @@ fn interrupted_record_with_a_clean_trace_still_repairs_and_resumes() {
     // faithfully; a stale nonzero count is refused (see the stale-step-count
     // test above) rather than mistaken for an interruption.
     run_json["steps"] = serde_json::Value::from(0);
+    // Forging those fields breaks the record seal, so read the document as
+    // written before the record seal existed: a genuinely interrupted
+    // pre-seal run carries no seal either.
+    run_json.as_object_mut().unwrap().remove("record_mac");
+    run_json
+        .as_object_mut()
+        .unwrap()
+        .remove("record_seal_version");
     write_record_json(&record, &run_json);
 
     let repaired = execute(
@@ -1213,8 +1221,10 @@ fn resume_from_record_refuses_a_prefix_step_with_missing_bytes() {
         ],
     );
     assert_eq!(resumed.status.code(), Some(1));
+    // Deleting the kept bytes breaks the record seal, so resume refuses the
+    // record as tampered before replaying anything.
     assert!(
-        text(&resumed.stderr).contains("record incomplete at step 0"),
+        text(&resumed.stderr).contains("record-integrity"),
         "{}",
         text(&resumed.stderr)
     );

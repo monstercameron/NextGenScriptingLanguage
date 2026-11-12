@@ -987,7 +987,8 @@ fn reject_path_collisions(journal: &Path, operations: &[PlannedEntry]) -> Result
             return Err(invalid("transaction journal cannot be a target file"));
         }
         let lock = filesystem::default_lock_path(&operation.path)?;
-        if lock == *journal || lock.starts_with(journal) {
+        let journal_identity = filesystem::lock_identity(journal);
+        if lock == *journal || lock.starts_with(journal) || lock.starts_with(&journal_identity) {
             return Err(invalid("transaction journal overlaps a target lock file"));
         }
     }
@@ -1008,10 +1009,14 @@ fn target_lock_paths(targets: &[&Path]) -> Result<Vec<PathBuf>, AppletError> {
         .iter()
         .map(|target| filesystem::default_lock_path(target))
         .collect::<Result<Vec<_>, _>>()?;
-    if targets
-        .iter()
-        .any(|target| locks.iter().any(|lock| lock.as_path() == *target))
-    {
+    // Compare canonical identities: a lock is built from the canonical parent,
+    // so a lexically different spelling of the same lock file must still match.
+    if targets.iter().any(|target| {
+        let identity = filesystem::lock_identity(target);
+        locks
+            .iter()
+            .any(|lock| lock.as_path() == *target || lock.as_path() == identity)
+    }) {
         return Err(invalid(
             "transaction target cannot be another target's lock file",
         ));

@@ -7,7 +7,12 @@
 //!
 //! A preserved final symlink is resolved to its canonical target and opened
 //! without following another final symlink; the link and target identity are
-//! rechecked before replacement. Writes sync the temp file; Unix then syncs
+//! rechecked before replacement. The default lock is derived from the
+//! canonical identity of the target, so a symlink alias, a `..` spelling and
+//! (on Windows) a case-only spelling share one lock file beside the referent.
+//! Limits: hard links are separate directory entries and still get separate
+//! locks; a target whose parent directory does not exist yet keeps its
+//! lexical lock path; non-cooperating writers are not stopped by any lock. Writes sync the temp file; Unix then syncs
 //! the parent directory, while Windows asks the OS to persist the rename
 //! entry during replacement and syncs the parent afterwards. A successful
 //! flush means the OS was asked, not that the entry provably survives power
@@ -760,9 +765,73 @@ pub(crate) fn default_lock_path(target: &Path) -> Result<PathBuf, AppletError> {
     target
         .file_name()
         .ok_or_else(|| invalid(format!("path has no file name: {}", target.display())))?;
-    let mut lock_name = sibling_prefix(target.file_name().unwrap_or_default());
+    // Every spelling of one file must name the same lock, so the lock sits
+    // beside the canonical identity rather than beside the spelling given.
+    let identity = lock_identity(target);
+    let name = identity
+        .file_name()
+        .ok_or_else(|| invalid(format!("path has no file name: {}", target.display())))?;
+    let mut lock_name = sibling_prefix(&case_folded_name(name));
     lock_name.push(".lock");
-    Ok(target.with_file_name(lock_name))
+    let directory = identity.parent().unwrap_or(Path::new("."));
+    Ok(directory.join(lock_name))
+}
+
+/// The canonical identity a default lock is derived from. A symlink alias
+/// resolves to its referent, `./a/../a/f` resolves to `a/f`, and an existing
+/// file on Windows takes its on-disk letter case. A target that does not
+/// exist yet keeps its name inside its canonical parent, because the parent
+/// is the only part that must already exist. When nothing canonicalizes (for
+/// example a missing parent) the lexical path is used and the write itself
+/// reports the error.
+pub(crate) fn lock_identity(target: &Path) -> PathBuf {
+    if let Ok(resolved) = fs::canonicalize(target) {
+        return strip_verbatim(resolved);
+    }
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    match (fs::canonicalize(parent), target.file_name()) {
+        (Ok(directory), Some(name)) => strip_verbatim(directory).join(name),
+        _ => target.to_path_buf(),
+    }
+}
+
+/// Windows canonical paths carry the verbatim `\\?\` prefix. Drive-letter
+/// paths lose it so the lock path reads, and compares, like the lexical path.
+/// UNC and other verbatim forms are returned unchanged.
+#[cfg(windows)]
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let stripped = path.to_str().and_then(|text| {
+        let rest = text.strip_prefix(r"\\?\")?;
+        let drive = rest.as_bytes();
+        (drive.len() >= 3
+            && drive[0].is_ascii_alphabetic()
+            && drive[1] == b':'
+            && drive[2] == b'\\')
+            .then(|| PathBuf::from(rest))
+    });
+    stripped.unwrap_or(path)
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    path
+}
+
+/// NTFS compares names case-insensitively, so on Windows names that differ
+/// only in case (including long names that are hashed) fold to one lock. The
+/// fold may also merge two distinct names on a case-sensitive directory; that
+/// only serializes them and cannot make a write succeed that should conflict.
+#[cfg(windows)]
+fn case_folded_name(name: &std::ffi::OsStr) -> OsString {
+    OsString::from(name.to_string_lossy().to_lowercase())
+}
+
+#[cfg(not(windows))]
+fn case_folded_name(name: &std::ffi::OsStr) -> OsString {
+    name.to_os_string()
 }
 
 /// The prefix of the lock and temporary files kept next to `file_name`:
@@ -1314,5 +1383,121 @@ mod tests {
             fs::read(sibling.join("victim.txt")).unwrap(),
             b"sibling-victim"
         );
+    }
+
+    fn lock_for(target: &Path) -> PathBuf {
+        default_lock_path(target).unwrap()
+    }
+
+    /// Holding the default lock of one spelling must block the other spelling.
+    fn assert_exclusive_locks(first: &Path, second: &Path) {
+        let context = ExecutionContext::unrestricted();
+        let held = acquire_path_lock(&lock_for(first), Duration::ZERO, &context).unwrap();
+        let error = acquire_path_lock(&lock_for(second), Duration::ZERO, &context)
+            .err()
+            .expect("the second spelling must wait on the lock the first holds");
+        assert_eq!(error.code, "lock_timeout");
+        drop(held);
+    }
+
+    #[test]
+    fn default_lock_is_shared_by_parent_directory_spellings() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("real.txt"), b"real").unwrap();
+        fs::create_dir(directory.path().join("sub")).unwrap();
+        let spelled = directory.path().join("sub").join("..").join("real.txt");
+        assert_eq!(
+            lock_for(&directory.path().join("real.txt")),
+            lock_for(&spelled)
+        );
+        // A target that does not exist yet still resolves its parent.
+        let missing = directory.path().join("sub").join("..").join("new.txt");
+        assert_eq!(
+            lock_for(&directory.path().join("new.txt")),
+            lock_for(&missing)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_lock_is_shared_by_symlink_alias_and_excludes_the_real_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&real, b"real").unwrap();
+        std::os::unix::fs::symlink("real.txt", &alias).unwrap();
+        assert_eq!(lock_for(&real), lock_for(&alias));
+        assert_exclusive_locks(&real, &alias);
+    }
+
+    /// NTFS names differ only in case for the same file. Long names take the
+    /// hashed lock prefix, so both the readable and the hashed forms are covered.
+    #[cfg(windows)]
+    #[test]
+    fn default_lock_folds_windows_case_aliases_including_long_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let upper = format!("{}X", "a".repeat(190));
+        let lower = format!("{}x", "a".repeat(190));
+        fs::write(directory.path().join(&upper), b"real").unwrap();
+        assert_eq!(
+            lock_for(&directory.path().join(&upper)),
+            lock_for(&directory.path().join(&lower))
+        );
+        assert_exclusive_locks(
+            &directory.path().join(&upper),
+            &directory.path().join(&lower),
+        );
+        assert_eq!(
+            lock_for(&directory.path().join("Report.TXT")),
+            lock_for(&directory.path().join("report.txt"))
+        );
+    }
+
+    /// A real-path writer and a symlink-alias writer that both expect the same
+    /// content hash must not both succeed. Both start while the lock for the
+    /// real file is held; the outcome is decided by serialization.
+    #[cfg(unix)]
+    #[test]
+    fn alias_and_real_path_writers_with_same_expected_hash_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&real, b"start").unwrap();
+        std::os::unix::fs::symlink("real.txt", &alias).unwrap();
+        let expected = hash(b"start");
+        let cwd = directory.path().to_path_buf();
+        let held = {
+            let context = ExecutionContext::unrestricted();
+            acquire_path_lock(&lock_for(&real), Duration::from_secs(5), &context).unwrap()
+        };
+        let spawn_writer = |path: PathBuf, content: &'static str| {
+            let expected = expected.clone();
+            let cwd = cwd.clone();
+            std::thread::spawn(move || {
+                let args = serde_json::json!({
+                    "path": path.to_str().unwrap(),
+                    "expected_content_hash": expected,
+                    "symlink_policy": "preserve",
+                    "permissions_policy": "preserve",
+                    "content": content,
+                })
+                .as_object()
+                .unwrap()
+                .clone();
+                let context = ExecutionContext::unrestricted();
+                write_atomic(&args, b"", &cwd, &context)
+            })
+        };
+        let through_alias = spawn_writer(alias.clone(), "via-alias");
+        let through_real = spawn_writer(real.clone(), "via-real");
+        std::thread::sleep(Duration::from_millis(100));
+        drop(held);
+        let results = [through_alias.join().unwrap(), through_real.join().unwrap()];
+        let successes = results.iter().filter(|result| result.is_ok()).count();
+        assert_eq!(successes, 1, "exactly one conflicting write may succeed");
+        assert!(results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.code == "conflict"));
     }
 }

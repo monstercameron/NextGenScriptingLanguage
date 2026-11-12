@@ -106,7 +106,13 @@ fn listen(
         }
     };
     let fd = reader.as_raw_fd();
-    let _nonblocking = Nonblocking::set(fd)?;
+    // Only the applet pipe is private to this process, so only it may be nonblocking. The
+    // inherited stdin shares its status flags with the parent shell and any sibling holding the
+    // same description, so it stays blocking and is read only after poll reports it readable.
+    let _nonblocking = match reader {
+        Reader::Applet(_) => Some(Nonblocking::set(fd)?),
+        Reader::Stdin(_) => None,
+    };
     let mut record = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut eof = false;
@@ -127,7 +133,15 @@ fn listen(
                 }
             }
         }
-        if !eof {
+        let readable = match reader {
+            Reader::Applet(_) => true,
+            Reader::Stdin(_) => match crate::platform::unix_ffi::poll_one(fd, libc::POLLIN, 0) {
+                Ok((ready, _)) => ready != 0,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => false,
+                Err(error) => return Err(error).context("polling listener"),
+            },
+        };
+        if !eof && readable {
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     eof = true;

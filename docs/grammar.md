@@ -197,7 +197,7 @@ run text.trim_final_lf with text text as trimmed
 ## Results and typed bindings
 
 ```text
-take        = "take" TYPE "at" TEXT "from" NAME "as" NAME
+take        = "take" ( TYPE | "unsigned" "integer" | "usize" ) "at" TEXT "from" NAME "as" NAME
 ```
 
 `as NAME` binds a result to a name. `take` reads one typed value out of a JSON result

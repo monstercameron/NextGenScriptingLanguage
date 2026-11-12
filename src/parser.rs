@@ -617,7 +617,15 @@ pub(crate) fn condition_operator_forms() -> &'static [&'static str] {
 /// Value types accepted by `take` (see `parse_take_json`).
 #[cfg(feature = "lsp")]
 pub(crate) fn take_type_forms() -> &'static [&'static str] {
-    &["text", "integer", "boolean", "json", "list of text"]
+    &[
+        "text",
+        "integer",
+        "unsigned integer",
+        "usize",
+        "boolean",
+        "json",
+        "list of text",
+    ]
 }
 
 /// A statement may start with `fetch:`, a label for its first step. Returns the label
@@ -2248,6 +2256,10 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     let (kind, mut cursor) = match tokens.get(1) {
         Some(Token::Word("text")) => (InputType::Text, 2),
         Some(Token::Word("integer")) => (InputType::Integer, 2),
+        Some(Token::Word("unsigned")) if word_is(tokens.get(2), "integer") => {
+            (InputType::UnsignedInteger, 3)
+        }
+        Some(Token::Word("usize")) => (InputType::Usize, 2),
         Some(Token::Word("boolean")) => (InputType::Boolean, 2),
         Some(Token::Word("json")) => (InputType::Json, 2),
         Some(Token::Word("list"))
@@ -2256,7 +2268,7 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
             (InputType::TextList, 4)
         }
         _ => bail!(
-            "expected `take <text|integer|boolean|list of text|json> at <quoted pointer> from <value> as <name>`"
+            "expected `take <text|integer|unsigned integer|usize|boolean|list of text|json> at <quoted pointer> from <value> as <name>`"
         ),
     };
     if !word_is(tokens.get(cursor), "at") {

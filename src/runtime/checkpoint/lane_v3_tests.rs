@@ -101,6 +101,7 @@ pub(super) fn journal() -> (tempfile::TempDir, CheckpointOptions, Journal) {
             },
             error: None,
             listener_cursor: None,
+            emitted_sha256: None,
         },
         completed_chain: chain_start(),
         completed_log_bytes: 0,
@@ -130,6 +131,7 @@ fn legacy_persist(journal: &Journal) {
         snapshot: journal.data.snapshot.clone(),
         error: journal.data.error.clone(),
         listener_cursor: journal.data.listener_cursor.clone(),
+        emitted_sha256: journal.data.emitted_sha256.clone(),
     };
     let data = serde_json::to_vec(&body).unwrap();
     let envelope = encode_envelope(&hex_digest(&data), &data);

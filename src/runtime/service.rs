@@ -384,16 +384,27 @@ fn fire(
     } else {
         run_finite(body, registry, options, signals, input, binding)?
     };
-    if let Err(error) = emit(&finite.output, &signals.cancelled, signals.deadline) {
-        if let Some(journal) = journal.as_deref_mut() {
-            if authorize_service_checkpoint(registry, &signals.sensitivity_floor()).is_ok() {
-                let _ = journal.fail(
-                    &format!("{error:#}"),
-                    signals.cancelled.load(Ordering::Relaxed),
-                );
+    // A restart that finds the output marker of this handler already written
+    // skips the emit: the write completed before the crash, only finish was lost.
+    let already_emitted = journal
+        .as_deref()
+        .is_some_and(|journal| journal.emitted_matches(&finite.output));
+    if !already_emitted {
+        if let Err(error) = emit(&finite.output, &signals.cancelled, signals.deadline) {
+            if let Some(journal) = journal.as_deref_mut() {
+                if authorize_service_checkpoint(registry, &signals.sensitivity_floor()).is_ok() {
+                    let _ = journal.fail(
+                        &format!("{error:#}"),
+                        signals.cancelled.load(Ordering::Relaxed),
+                    );
+                }
             }
+            return Err(error);
         }
-        return Err(error);
+        if let Some(journal) = journal.as_deref_mut() {
+            authorize_service_checkpoint(registry, &signals.sensitivity_floor())?;
+            journal.record_emitted(&finite.output)?;
+        }
     }
     if let Some(journal) = journal {
         authorize_service_checkpoint(registry, &signals.sensitivity_floor())?;

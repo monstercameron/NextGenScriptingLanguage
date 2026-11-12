@@ -311,6 +311,10 @@ struct JournalData {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     listener_cursor: Option<ListenerEventCursor>,
+    /// SHA-256 of the output the service handler delivered, recorded right after
+    /// the write and cleared when the event finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    emitted_sha256: Option<String>,
 }
 
 /// A local cursor for listener records admitted to a checkpoint. It is not a
@@ -342,6 +346,8 @@ struct JournalDisk {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     listener_cursor: Option<ListenerEventCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    emitted_sha256: Option<String>,
 }
 
 /// Borrow the large snapshot and identity while retaining the on-disk field order.
@@ -357,6 +363,8 @@ struct JournalDiskRef<'a> {
     error: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     listener_cursor: &'a Option<ListenerEventCursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emitted_sha256: &'a Option<String>,
 }
 
 /// The envelope around any version's body. The body stays raw, so the checksum is
@@ -928,6 +936,7 @@ impl Journal {
                 snapshot,
                 error: None,
                 listener_cursor: None,
+                emitted_sha256: None,
             };
             let mut journal = Self {
                 directory,
@@ -1624,6 +1633,29 @@ impl Journal {
         Ok(())
     }
 
+    /// Record that the service handler's output was delivered. The service calls
+    /// this right after the emit returns and before `finish`, so a restart that
+    /// finds the marker can skip re-emitting the same output.
+    pub fn record_emitted(&mut self, output: &[u8]) -> Result<()> {
+        if self.data.identity.mode == "finite" {
+            bail!("output markers are only valid for service checkpoints");
+        }
+        if self.data.in_flight.is_some() {
+            bail!("cannot record output while a checkpoint node is in flight");
+        }
+        let previous = self.data.emitted_sha256.replace(hex_digest(output));
+        if let Err(error) = self.persist() {
+            self.data.emitted_sha256 = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// True when the durable output marker names exactly this output.
+    pub fn emitted_matches(&self, output: &[u8]) -> bool {
+        self.data.emitted_sha256.as_deref() == Some(hex_digest(output).as_str())
+    }
+
     pub fn finish(&mut self) -> Result<()> {
         if self.data.in_flight.is_some() {
             bail!("cannot finish with a checkpoint node in flight");
@@ -1647,6 +1679,7 @@ impl Journal {
         let previous_status = self.data.status;
         let previous_error = self.data.error.take();
         let previous_listener_cursor = self.data.listener_cursor.clone();
+        let previous_emitted = self.data.emitted_sha256.take();
         if let (Some((sequence, digest)), Some(cursor)) =
             (listener_commit, self.data.listener_cursor.as_mut())
         {
@@ -1663,6 +1696,7 @@ impl Journal {
             self.data.status = previous_status;
             self.data.error = previous_error;
             self.data.listener_cursor = previous_listener_cursor;
+            self.data.emitted_sha256 = previous_emitted;
             return Err(error);
         }
         self.collect_unreferenced_blobs();
@@ -1858,6 +1892,7 @@ impl Journal {
             snapshot: &self.data.snapshot,
             error: &self.data.error,
             listener_cursor: &self.data.listener_cursor,
+            emitted_sha256: &self.data.emitted_sha256,
         };
         if let Err(error) = write_envelope(
             &self.directory,
@@ -2532,6 +2567,7 @@ fn read_journal_parts_file(
             snapshot: disk.snapshot,
             error: disk.error,
             listener_cursor: disk.listener_cursor,
+            emitted_sha256: disk.emitted_sha256,
         };
         (data, log)
     } else {
@@ -2539,6 +2575,14 @@ fn read_journal_parts_file(
             "unsupported checkpoint version {version}; this build reads versions {LEGACY_JOURNAL_VERSION} through {JOURNAL_VERSION}"
         );
     };
+    if let Some(digest) = &data.emitted_sha256 {
+        if !data.identity.mode.starts_with("service:") {
+            bail!("checkpoint journal contains an output marker outside service mode");
+        }
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("checkpoint journal output marker is not a SHA-256 digest");
+        }
+    }
     if let Some(cursor) = &data.listener_cursor {
         if !data.identity.mode.starts_with("service:") {
             bail!("checkpoint journal contains a listener cursor outside service mode");
@@ -5411,5 +5455,54 @@ mod atomic_write_tests {
             b"pinned journal"
         );
         assert!(!directory.join("journal.json").exists());
+    }
+}
+
+#[cfg(test)]
+mod output_marker_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn service_output_marker_survives_reopen_and_clears_on_finish() {
+        let temp = tempdir().unwrap();
+        let program_path = temp.path().join("flow.txt");
+        fs::write(&program_path, "workflow").unwrap();
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let mut options = CheckpointOptions {
+            directory: temp.path().join("checkpoint"),
+            program_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        let mut journal =
+            Journal::open_with_inputs(&options, &cwd, "service:trigger-hash", 1024, None).unwrap();
+        journal
+            .begin_execution_parts(
+                &cwd,
+                b"event\n",
+                [("result", &Value::String("event\n".to_owned()))],
+            )
+            .unwrap();
+        assert!(!journal.emitted_matches(b"handled\n"));
+        journal.record_emitted(b"handled\n").unwrap();
+        assert!(journal.emitted_matches(b"handled\n"));
+        assert!(!journal.emitted_matches(b"other\n"));
+        drop(journal);
+
+        options.resume = true;
+        let mut journal =
+            Journal::open_with_inputs(&options, &cwd, "service:trigger-hash", 1024, None).unwrap();
+        assert!(journal.has_pending());
+        assert!(journal.emitted_matches(b"handled\n"));
+        journal.finish().unwrap();
+        assert!(!journal.emitted_matches(b"handled\n"));
+        drop(journal);
+
+        let journal =
+            Journal::open_with_inputs(&options, &cwd, "service:trigger-hash", 1024, None).unwrap();
+        assert!(journal.is_finished());
+        assert!(!journal.emitted_matches(b"handled\n"));
     }
 }

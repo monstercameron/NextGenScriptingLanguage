@@ -1,0 +1,6 @@
+Starting: install-packages
+:: Retrieving packages...
+downloading neovim-0.10.0-1-x86_64.pkg.tar.zst...
+warning: could not write to /var/cache/pacman/pkg/neovim-0.10.0-1-x86_64.pkg.tar.zst.part: No space left on device
+error: failed to commit transaction (not enough free disk space)
+Failed: install-packages (exit code: 1)

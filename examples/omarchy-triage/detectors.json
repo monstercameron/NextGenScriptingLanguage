@@ -1,0 +1,23 @@
+[
+  {
+    "family": "file-conflict",
+    "phrase": "exists in filesystem",
+    "match": "fixed",
+    "source": "deterministic",
+    "description": "pacman refuses a transaction because a file it would write already exists and belongs to another package"
+  },
+  {
+    "family": "package-conflict",
+    "phrase": "unresolvable package conflicts detected",
+    "match": "fixed",
+    "source": "deterministic",
+    "description": "pacman finds packages that cannot be installed together"
+  },
+  {
+    "family": "disk-space",
+    "phrase": "No space left on device",
+    "match": "fixed",
+    "source": "deterministic",
+    "description": "a write fails because the target filesystem is full"
+  }
+]

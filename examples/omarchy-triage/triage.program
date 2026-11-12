@@ -1,0 +1,19 @@
+# Purpose: Stage-1 failure-family triage for one Omarchy update or install log.
+# Input: log, the path to the log file (the failing step window is not extracted yet).
+# Output: one TRIAGE header line with family and source, then the evidence lines that matched.
+# Detectors are fixed phrases in detectors.json; the phrases below must match that table.
+# No model call runs here. A log no detector matches reports family=unclassified.
+accept log as text
+run "grep" with arguments ["-n", "-F", "-e", "exists in filesystem", "--", log] as file_matches and keep status as file_status
+if file_status is 0
+  run "printf" with arguments ["TRIAGE family=file-conflict source=deterministic\n%s", file_matches]
+otherwise
+  run "grep" with arguments ["-n", "-F", "-e", "unresolvable package conflicts detected", "--", log] as package_matches and keep status as package_status
+  if package_status is 0
+    run "printf" with arguments ["TRIAGE family=package-conflict source=deterministic\n%s", package_matches]
+  otherwise
+    run "grep" with arguments ["-n", "-F", "-e", "No space left on device", "--", log] as disk_matches and keep status as disk_status
+    if disk_status is 0
+      run "printf" with arguments ["TRIAGE family=disk-space source=deterministic\n%s", disk_matches]
+    otherwise
+      run "printf" with arguments ["TRIAGE family=unclassified source=deterministic\n"]

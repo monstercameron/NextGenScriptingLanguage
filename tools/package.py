@@ -4,12 +4,14 @@ import argparse
 import gzip
 import hashlib
 import io
+import json
 import os
 import re
 from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -280,7 +282,121 @@ cp -a "%s/usr/." %%{buildroot}/usr/
     shutil.copyfile(packages[0], dest / ("execute-" + value + "-1." + rpmarch + ".rpm"))
 
 
+DISTROS = ("arch", "debian")
+DPKG_LINE = re.compile(r"^([^:\s]+)(?::[^:\s]+)?: (/\S+)$")
+
+
+def explain_executables(command, program):
+    """Executable names a program invokes, from `explain --json` (summary.executables).
+
+    `command` is the argv prefix that runs execute, for example ["execute"]."""
+    out = subprocess.run(
+        list(map(str, command)) + ["explain", str(program), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return executables_from_explain(out)
+
+
+def executables_from_explain(text):
+    names = json.loads(text).get("summary", {}).get("executables")
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise ValueError("explain output has no summary.executables list")
+    return names
+
+
+def system_runner(argv):
+    """Stdout of a package-database query. Exit 1 means no match, which is an empty answer;
+    any other failure (missing database, missing tool) is an error, not a silent gap."""
+    done = subprocess.run(argv, capture_output=True, text=True)
+    if done.returncode == 1:
+        return ""
+    if done.returncode != 0:
+        raise RuntimeError(" ".join(argv) + " failed: " + done.stderr.strip())
+    return done.stdout
+
+
+def candidate_paths(name):
+    """Root-relative paths where a bare or absolute executable name is installed, or None
+    when the name cannot name a system executable (relative or empty)."""
+    if name.startswith("/"):
+        return [name.lstrip("/")]
+    if not name or "/" in name or name in (".", ".."):
+        return None
+    return ["usr/bin/" + name, "usr/sbin/" + name]
+
+
+def owners(distro, relative, runner):
+    """Packages that own one root-relative file, from `pacman -F` or `dpkg -S`."""
+    if distro == "arch":
+        packages = set()
+        package = None
+        for line in runner(["pacman", "-F", relative]).splitlines():
+            if not line.strip():
+                continue
+            if line[0].isspace():
+                if package and line.strip() == relative:
+                    packages.add(package)
+            else:
+                # Header line: "repo/name version"; the package name follows the repo.
+                package = line.split()[0].split("/")[-1]
+        return packages
+    absolute = "/" + relative
+    packages = set()
+    for line in runner(["dpkg", "-S", absolute]).splitlines():
+        match = DPKG_LINE.match(line.strip())
+        if match and match.group(2) == absolute:
+            packages.add(match.group(1))
+    return packages
+
+
+def resolve_depends(executables, distro, runner):
+    """(depends, unresolved): the packages that own the executables, and each executable
+    that no package owns, is ambiguous, or cannot name a system executable."""
+    depends = set()
+    unresolved = []
+    for name in executables:
+        relatives = candidate_paths(name)
+        if relatives is None:
+            unresolved.append((name, "not an installed system executable name"))
+            continue
+        found = set()
+        for relative in relatives:
+            found |= owners(distro, relative, runner)
+        if not found:
+            unresolved.append((name, "no " + distro + " package owns it"))
+        elif len(found) > 1:
+            unresolved.append((name, "ambiguous: " + ", ".join(sorted(found))))
+        else:
+            depends |= found
+    return sorted(depends), unresolved
+
+
+def deps_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="package.py deps",
+        description="Print the distro packages that own the executables the programs invoke. "
+        "Queries local file databases only (pacman -F, dpkg -S); it never syncs them.",
+    )
+    parser.add_argument("programs", nargs="+", type=Path)
+    parser.add_argument("--distro", required=True, choices=DISTROS)
+    parser.add_argument("--execute", default="execute", help="execute binary to run explain with")
+    args = parser.parse_args(argv)
+    names = set()
+    for program in args.programs:
+        names.update(explain_executables([args.execute], program))
+    depends, unresolved = resolve_depends(sorted(names), args.distro, system_runner)
+    for package in depends:
+        print(package)
+    for name, reason in unresolved:
+        print("unresolved: " + name + " (" + reason + ")", file=sys.stderr)
+    return 1 if unresolved else 0
+
+
 def main():
+    if sys.argv[1:2] == ["deps"]:
+        sys.exit(deps_main(sys.argv[2:]))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--binaries", required=True, type=Path)

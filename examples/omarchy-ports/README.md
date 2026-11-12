@@ -90,5 +90,19 @@ These ports follow Bash's streaming rule: a command's output reaches stdout as i
 produced, and a failed native command keeps its streamed output, as under Bash. They remain
 interface and behavior ports against fakes, and no live Omarchy session has certified them.
 
+## Package dependencies
+
+`tools/package.py deps` prints the distro packages that own the executables a
+program invokes, taken from `execute explain --json` (`summary.executables`). It
+asks the local `pacman -F` (Arch) or `dpkg -S` (Debian) databases and never syncs
+them. An executable that no package owns, that several packages own, or that is not
+a system name (a relative path) is listed on stderr and the command exits 1.
+
+```sh
+python3 tools/package.py deps examples/omarchy-ports/omarchy-notification-dismiss.program --distro arch
+```
+
+Building a package set from these dependencies is not done yet.
+
 The remaining production gates are in
 [production-readiness.md](../../docs/production-readiness.md).

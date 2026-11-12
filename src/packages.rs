@@ -1,4 +1,5 @@
 //! Debian package names, argument vectors and output parsers for the apt and dpkg applets (#334).
+//! The Arch pacman layer (#328) lives in the [`arch`] submodule at the end of this file.
 //!
 //! Nothing here starts a process. Builders return an [`Invocation`]: a program, an argument
 //! vector (never a shell string) and the environment to run it with. [`PackageSpec`] is the
@@ -69,6 +70,22 @@ pub enum PackagesError {
     RemovalRefused {
         names: Vec<String>,
     },
+    InvalidPath {
+        input: String,
+        reason: &'static str,
+    },
+    MalformedInstalledLine {
+        line: String,
+    },
+    MalformedOrphanLine {
+        line: String,
+    },
+    MalformedOwnerLine {
+        line: String,
+    },
+    MalformedUpgradeLine {
+        line: String,
+    },
 }
 
 /// Typed meaning of an `E:` line from apt-get.
@@ -129,6 +146,21 @@ impl fmt::Display for PackagesError {
                 "the plan removes {}; allow removals explicitly to proceed",
                 names.join(", ")
             ),
+            Self::InvalidPath { input, reason } => {
+                write!(f, "invalid path {reason} in {input:?}")
+            }
+            Self::MalformedInstalledLine { line } => {
+                write!(f, "unreadable pacman -Q line {line:?}")
+            }
+            Self::MalformedOrphanLine { line } => {
+                write!(f, "unreadable orphan package name {line:?}")
+            }
+            Self::MalformedOwnerLine { line } => {
+                write!(f, "unreadable pacman -Qo line {line:?}")
+            }
+            Self::MalformedUpgradeLine { line } => {
+                write!(f, "unreadable pacman -Qu line {line:?}")
+            }
         }
     }
 }
@@ -707,6 +739,563 @@ pub fn approve_plan(plan: &Plan, allow_removals: bool) -> Result<(), PackagesErr
         Ok(())
     } else {
         Err(PackagesError::RemovalRefused { names })
+    }
+}
+
+/// Arch Linux pacman layer (#328): names, argument vectors and output parsers.
+///
+/// It mirrors the Debian layer above. [`PackageSpec`] is the only way to make a name, builders
+/// return an [`Invocation`] (program, argument vector and environment), and parsers return typed
+/// values or an error. Nothing here starts a process. Install and AUR install already ship as
+/// manifests (`package.install`, `package.install_aur`), and `package.query` wraps `pacman -Qi`.
+pub mod arch {
+    use super::{owned, Invocation, PackagesError};
+
+    /// Environment for every pacman call here. The parsers expect C-locale, English output.
+    pub const ARCH_ENV: &[(&str, &str)] = &[("LC_ALL", "C")];
+
+    /// A validated Arch package name: lowercase letters and digits, and `@ . _ + -`. A name
+    /// cannot start with `-` or `.`, so it can never be read as an option.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PackageSpec {
+        name: String,
+    }
+
+    impl PackageSpec {
+        /// Parses a bare package name. Versions, `:arch` qualifiers and `=` are refused.
+        pub fn parse(input: &str) -> Result<Self, PackagesError> {
+            if is_package_name(input) {
+                Ok(Self {
+                    name: input.to_string(),
+                })
+            } else {
+                Err(PackagesError::InvalidSpec {
+                    input: input.to_string(),
+                    reason: "name",
+                })
+            }
+        }
+
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    /// Arch packaging rule: `[a-z0-9@._+-]+`, not starting with `-` or `.`.
+    fn is_package_name(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.first().is_some_and(|c| !matches!(*c, b'-' | b'.'))
+            && b.iter().all(|c| {
+                c.is_ascii_lowercase()
+                    || c.is_ascii_digit()
+                    || matches!(*c, b'@' | b'.' | b'_' | b'+' | b'-')
+            })
+    }
+
+    /// pacman versions are non-empty runs of printable ASCII with no space.
+    fn is_version(s: &str) -> bool {
+        !s.is_empty() && s.bytes().all(|c| c.is_ascii_graphic())
+    }
+
+    fn pacman(args: Vec<String>) -> Invocation {
+        Invocation {
+            program: "pacman",
+            args,
+            env: ARCH_ENV,
+        }
+    }
+
+    fn require_names(names: &[PackageSpec]) -> Result<(), PackagesError> {
+        if names.is_empty() {
+            Err(PackagesError::NoNames)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// How `pacman -R` handles dependencies and configuration files. Plain is the default and
+    /// removes only the named packages. The other modes are opt-in and must be chosen by name.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum RemoveMode {
+        /// `-R`: only the named packages. pacman refuses if another package still needs them.
+        #[default]
+        Plain,
+        /// `-Rs`: also removes dependencies that nothing else needs (recursive).
+        Cascade,
+        /// `-Rns`: as `Cascade`, and does not back up modified configuration files.
+        CascadeNoSave,
+        /// `-Rdd`: skips every dependency check. This can leave the system with broken packages.
+        NoDependencyChecks,
+    }
+
+    impl RemoveMode {
+        fn flags(self) -> &'static str {
+            match self {
+                Self::Plain => "-R",
+                Self::Cascade => "-Rs",
+                Self::CascadeNoSave => "-Rns",
+                Self::NoDependencyChecks => "-Rdd",
+            }
+        }
+    }
+
+    /// `pacman -R<mode> --noconfirm -- names...`. Names only: a version is not a removal target.
+    pub fn remove(names: &[PackageSpec], mode: RemoveMode) -> Result<Invocation, PackagesError> {
+        require_names(names)?;
+        let mut args = owned(&[mode.flags(), "--noconfirm", "--"]);
+        args.extend(names.iter().map(|spec| spec.name.clone()));
+        Ok(pacman(args))
+    }
+
+    /// Which installed packages `pacman -Q` reports.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ListScope {
+        /// `-Q`: every installed package.
+        All,
+        /// `-Qe`: packages installed explicitly.
+        Explicit,
+        /// `-Qd`: packages installed only as dependencies.
+        Dependency,
+    }
+
+    /// `pacman -Q`, `-Qe` or `-Qd`: `name version` for each installed package, one per line.
+    pub fn list_installed(scope: ListScope) -> Invocation {
+        let flag = match scope {
+            ListScope::All => "-Q",
+            ListScope::Explicit => "-Qe",
+            ListScope::Dependency => "-Qd",
+        };
+        pacman(owned(&[flag]))
+    }
+
+    /// `pacman -Qo -- path`: the package that owns a file. The path must be absolute, and must
+    /// contain no NUL and no line break, because the answer is a single line.
+    pub fn owner(path: &str) -> Result<Invocation, PackagesError> {
+        let refuse = |reason: &'static str| PackagesError::InvalidPath {
+            input: path.to_string(),
+            reason,
+        };
+        if !path.starts_with('/') {
+            return Err(refuse("must be absolute"));
+        }
+        if path.contains('\0') {
+            return Err(refuse("contains NUL"));
+        }
+        if path.contains(['\n', '\r']) {
+            return Err(refuse("contains a line break"));
+        }
+        Ok(pacman(owned(&["-Qo", "--", path])))
+    }
+
+    /// `pacman -Qtdq`: installed dependencies that nothing requires, one name per line.
+    pub fn orphans() -> Invocation {
+        pacman(owned(&["-Qtdq"]))
+    }
+
+    /// `pacman -Qu`: pending upgrades, read from the last synced package database. It reads the
+    /// local database only and does not sync (no `-Sy`), so its answer is as current as the
+    /// last sync and no newer.
+    pub fn upgrade_plan() -> Invocation {
+        pacman(owned(&["-Qu"]))
+    }
+
+    /// One installed package as `pacman -Q` reports it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct InstalledPackage {
+        pub name: String,
+        pub version: String,
+    }
+
+    /// Parses `pacman -Q`, `-Qe` or `-Qd` output. Empty output means no packages.
+    pub fn parse_installed(output: &str) -> Result<Vec<InstalledPackage>, PackagesError> {
+        output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(
+                |line| match line.split(' ').collect::<Vec<&str>>().as_slice() {
+                    [name, version] if is_package_name(name) && is_version(version) => {
+                        Ok(InstalledPackage {
+                            name: name.to_string(),
+                            version: version.to_string(),
+                        })
+                    }
+                    _ => Err(PackagesError::MalformedInstalledLine {
+                        line: line.to_string(),
+                    }),
+                },
+            )
+            .collect()
+    }
+
+    /// Parses `pacman -Qtdq` output: one name per line. Empty output means no orphans.
+    pub fn parse_orphans(output: &str) -> Result<Vec<PackageSpec>, PackagesError> {
+        output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                PackageSpec::parse(line).map_err(|_| PackagesError::MalformedOrphanLine {
+                    line: line.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// The package that owns a file, and the version installed.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Owner {
+        pub path: String,
+        pub name: String,
+        pub version: String,
+    }
+
+    /// Whether `pacman -Qo` found an owner. An unowned path is a normal answer, not an error.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Ownership {
+        Owned(Owner),
+        NotOwned,
+    }
+
+    /// Parses `pacman -Qo` output: `<path> is owned by <name> <version>`. Empty output means
+    /// no package owns the path (pacman writes that to stderr and exits nonzero, so the caller
+    /// passes stdout regardless). More than one line is an error.
+    pub fn parse_owner(output: &str) -> Result<Ownership, PackagesError> {
+        let lines: Vec<&str> = output.lines().filter(|line| !line.is_empty()).collect();
+        match lines.as_slice() {
+            [] => Ok(Ownership::NotOwned),
+            [line] => parse_owner_line(line).map(Ownership::Owned),
+            [_, extra, ..] => Err(PackagesError::MalformedOwnerLine {
+                line: extra.to_string(),
+            }),
+        }
+    }
+
+    fn parse_owner_line(line: &str) -> Result<Owner, PackagesError> {
+        let malformed = || PackagesError::MalformedOwnerLine {
+            line: line.to_string(),
+        };
+        // The name and version are the last two words, so they are peeled off the end. The
+        // path comes first and may itself contain " is owned by ".
+        let (head, version) = line.rsplit_once(' ').ok_or_else(malformed)?;
+        let (head, name) = head.rsplit_once(' ').ok_or_else(malformed)?;
+        let path = head.strip_suffix(" is owned by").ok_or_else(malformed)?;
+        if !path.starts_with('/') || !is_package_name(name) || !is_version(version) {
+            return Err(malformed());
+        }
+        Ok(Owner {
+            path: path.to_string(),
+            name: name.to_string(),
+            version: version.to_string(),
+        })
+    }
+
+    /// One pending upgrade from `pacman -Qu`. `ignored` is set when IgnorePkg holds it back.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Upgrade {
+        pub name: String,
+        pub from: String,
+        pub to: String,
+        pub ignored: bool,
+    }
+
+    /// Parses `pacman -Qu` output: `name old -> new`, with ` [ignored]` appended when the
+    /// package is held back. Empty output means nothing is pending.
+    pub fn parse_upgrade_plan(output: &str) -> Result<Vec<Upgrade>, PackagesError> {
+        output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(parse_upgrade_line)
+            .collect()
+    }
+
+    fn parse_upgrade_line(line: &str) -> Result<Upgrade, PackagesError> {
+        let malformed = || PackagesError::MalformedUpgradeLine {
+            line: line.to_string(),
+        };
+        let (name, from, to, ignored) = match line.split(' ').collect::<Vec<&str>>().as_slice() {
+            [name, from, "->", to] => (*name, *from, *to, false),
+            [name, from, "->", to, "[ignored]"] => (*name, *from, *to, true),
+            _ => return Err(malformed()),
+        };
+        if !is_package_name(name) || !is_version(from) || !is_version(to) {
+            return Err(malformed());
+        }
+        Ok(Upgrade {
+            name: name.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            ignored,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn spec(input: &str) -> PackageSpec {
+            PackageSpec::parse(input).expect("fixture package name is valid")
+        }
+
+        fn argv(inv: &Invocation) -> Vec<&str> {
+            inv.args.iter().map(String::as_str).collect()
+        }
+
+        #[test]
+        fn name_validator_accepts_arch_names() {
+            for ok in [
+                "curl",
+                "g++",
+                "python-3.12",
+                "lib32-glibc",
+                "linux-zen",
+                "x.y+z_@",
+                "a",
+            ] {
+                assert!(PackageSpec::parse(ok).is_ok(), "{ok} should be accepted");
+            }
+            assert_eq!(spec("gtk4").name(), "gtk4");
+        }
+
+        #[test]
+        fn name_validator_refuses_hostile_names() {
+            let hostile = [
+                "",
+                "-",
+                "-y",
+                "--noconfirm",
+                "--",
+                ".hidden",
+                "..",
+                "Curl",
+                "curl x",
+                "curl\tx",
+                "curl\nx",
+                "curl;id",
+                "curl$(id)",
+                "curl`id`",
+                "curl|id",
+                "curl&id",
+                "curl>x",
+                "../curl",
+                "cu/rl",
+                "curl\0",
+                "curl\u{e9}",
+                "curl:amd64",
+                "curl=1.0",
+            ];
+            for bad in hostile {
+                assert!(
+                    PackageSpec::parse(bad).is_err(),
+                    "{bad:?} should be refused"
+                );
+            }
+        }
+
+        #[test]
+        fn environment_is_c_locale() {
+            assert_eq!(ARCH_ENV, &[("LC_ALL", "C")]);
+            assert_eq!(orphans().env, ARCH_ENV);
+        }
+
+        #[test]
+        fn remove_default_is_plain_and_argv_is_exact() {
+            assert_eq!(RemoveMode::default(), RemoveMode::Plain);
+            let inv = remove(&[spec("curl"), spec("foo")], RemoveMode::Plain).expect("names");
+            assert_eq!(inv.program, "pacman");
+            assert_eq!(argv(&inv), vec!["-R", "--noconfirm", "--", "curl", "foo"]);
+        }
+
+        #[test]
+        fn remove_recursive_modes_are_only_the_named_flags() {
+            let names = [spec("curl")];
+            let flags = |mode| {
+                let inv = remove(&names, mode).expect("names");
+                argv(&inv)[0].to_string()
+            };
+            assert_eq!(flags(RemoveMode::Cascade), "-Rs");
+            assert_eq!(flags(RemoveMode::CascadeNoSave), "-Rns");
+            assert_eq!(flags(RemoveMode::NoDependencyChecks), "-Rdd");
+        }
+
+        #[test]
+        fn remove_refuses_empty_input() {
+            assert_eq!(remove(&[], RemoveMode::Plain), Err(PackagesError::NoNames));
+        }
+
+        #[test]
+        fn list_argv_is_exact_for_each_scope() {
+            assert_eq!(argv(&list_installed(ListScope::All)), vec!["-Q"]);
+            assert_eq!(argv(&list_installed(ListScope::Explicit)), vec!["-Qe"]);
+            assert_eq!(argv(&list_installed(ListScope::Dependency)), vec!["-Qd"]);
+        }
+
+        #[test]
+        fn owner_argv_is_exact_and_path_is_checked() {
+            let inv = owner("/usr/bin/ls").expect("absolute path");
+            assert_eq!(inv.program, "pacman");
+            assert_eq!(argv(&inv), vec!["-Qo", "--", "/usr/bin/ls"]);
+            for (bad, reason) in [
+                ("usr/bin/ls", "must be absolute"),
+                ("", "must be absolute"),
+                ("/a\0b", "contains NUL"),
+                ("/a\nb", "contains a line break"),
+                ("/a\rb", "contains a line break"),
+            ] {
+                assert_eq!(
+                    owner(bad).err(),
+                    Some(PackagesError::InvalidPath {
+                        input: bad.to_string(),
+                        reason,
+                    }),
+                    "{bad:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn orphans_and_upgrade_argv_are_exact() {
+            assert_eq!(argv(&orphans()), vec!["-Qtdq"]);
+            assert_eq!(argv(&upgrade_plan()), vec!["-Qu"]);
+        }
+
+        #[test]
+        fn parse_installed_normal_empty_and_malformed() {
+            let parsed = parse_installed("curl 8.5.0-1\nlinux-zen 6.8.1-1\n").expect("fixture");
+            assert_eq!(
+                parsed,
+                vec![
+                    InstalledPackage {
+                        name: "curl".to_string(),
+                        version: "8.5.0-1".to_string()
+                    },
+                    InstalledPackage {
+                        name: "linux-zen".to_string(),
+                        version: "6.8.1-1".to_string()
+                    },
+                ]
+            );
+            assert_eq!(parse_installed(""), Ok(Vec::new()));
+            for bad in [
+                "curl\n",
+                "curl 1.0 extra\n",
+                "Curl 1.0\n",
+                "-y 1.0\n",
+                "curl  1.0\n",
+            ] {
+                assert!(
+                    matches!(
+                        parse_installed(bad),
+                        Err(PackagesError::MalformedInstalledLine { .. })
+                    ),
+                    "{bad:?} should be refused"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_orphans_normal_empty_and_malformed() {
+            assert_eq!(
+                parse_orphans("libpng\nzlib\n"),
+                Ok(vec![spec("libpng"), spec("zlib")])
+            );
+            assert_eq!(parse_orphans(""), Ok(Vec::new()));
+            for bad in ["Libpng\n", "-y\n", "two words\n", "a/b\n"] {
+                assert!(
+                    matches!(
+                        parse_orphans(bad),
+                        Err(PackagesError::MalformedOrphanLine { .. })
+                    ),
+                    "{bad:?} should be refused"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_owner_normal_and_not_owned() {
+            assert_eq!(
+                parse_owner("/usr/bin/ls is owned by coreutils 9.4-1\n"),
+                Ok(Ownership::Owned(Owner {
+                    path: "/usr/bin/ls".to_string(),
+                    name: "coreutils".to_string(),
+                    version: "9.4-1".to_string(),
+                }))
+            );
+            assert_eq!(parse_owner(""), Ok(Ownership::NotOwned));
+        }
+
+        #[test]
+        fn parse_owner_takes_name_and_version_from_the_end() {
+            // A path that contains " is owned by " must not confuse the split.
+            let line = "/opt/a is owned by b/c is owned by foo 1.2-3\n";
+            assert_eq!(
+                parse_owner(line),
+                Ok(Ownership::Owned(Owner {
+                    path: "/opt/a is owned by b/c".to_string(),
+                    name: "foo".to_string(),
+                    version: "1.2-3".to_string(),
+                }))
+            );
+        }
+
+        #[test]
+        fn parse_owner_refuses_malformed_and_extra_lines() {
+            for bad in [
+                "/usr/bin/ls is owned by coreutils\n",
+                "usr/bin/ls is owned by coreutils 9.4-1\n",
+                "garbage\n",
+                "/a is owned by  9.4-1\n",
+                "/a is owned by Bad 1.0\n",
+                "/a is owned by foo 1.0\n/b is owned by bar 2.0\n",
+            ] {
+                assert!(
+                    matches!(
+                        parse_owner(bad),
+                        Err(PackagesError::MalformedOwnerLine { .. })
+                    ),
+                    "{bad:?} should be refused"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_upgrade_plan_normal_ignored_empty_and_malformed() {
+            let parsed = parse_upgrade_plan(
+                "linux-zen 6.8.1-1 -> 6.8.2-1\nopenssh 9.6p1-1 -> 9.7p1-1 [ignored]\n",
+            )
+            .expect("fixture");
+            assert_eq!(
+                parsed,
+                vec![
+                    Upgrade {
+                        name: "linux-zen".to_string(),
+                        from: "6.8.1-1".to_string(),
+                        to: "6.8.2-1".to_string(),
+                        ignored: false,
+                    },
+                    Upgrade {
+                        name: "openssh".to_string(),
+                        from: "9.6p1-1".to_string(),
+                        to: "9.7p1-1".to_string(),
+                        ignored: true,
+                    },
+                ]
+            );
+            assert_eq!(parse_upgrade_plan(""), Ok(Vec::new()));
+            for bad in [
+                "curl 1.0 2.0\n",
+                "curl 1.0 => 2.0\n",
+                "curl 1.0 -> 2.0 extra\n",
+                "curl 1.0 -> 2.0 [held]\n",
+                "Curl 1.0 -> 2.0\n",
+            ] {
+                assert!(
+                    matches!(
+                        parse_upgrade_plan(bad),
+                        Err(PackagesError::MalformedUpgradeLine { .. })
+                    ),
+                    "{bad:?} should be refused"
+                );
+            }
+        }
     }
 }
 

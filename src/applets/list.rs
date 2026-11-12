@@ -32,6 +32,17 @@ fn index(value: i64, len: usize) -> Result<usize, AppletError> {
         .ok_or_else(|| invalid("list index is out of range"))
 }
 
+/// Narrows an unsigned JSON magnitude to `usize`, returning `None` instead of
+/// wrapping when it exceeds `max`. Callers pass `usize::MAX as u64`; tests pass
+/// smaller maxima to exercise 32-bit limits on any host.
+pub(super) fn usize_within(value: u64, max: u64) -> Option<usize> {
+    if value <= max {
+        usize::try_from(value).ok()
+    } else {
+        None
+    }
+}
+
 pub(super) fn run(
     operation: &str,
     args: &Map<String, Value>,
@@ -101,8 +112,9 @@ pub(super) fn run(
             let length = args
                 .get("length")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("args.length must be nonnegative"))?
-                as usize;
+                .ok_or_else(|| invalid("args.length must be nonnegative"))?;
+            let length = usize_within(length, usize::MAX as u64)
+                .ok_or_else(|| invalid("list.slice range is out of bounds"))?;
             let end = start
                 .checked_add(length)
                 .filter(|end| *end <= values.len())
@@ -211,5 +223,46 @@ pub(super) fn run(
             Ok(Value::Array(output))
         }
         _ => Err(invalid(format!("unknown list operation {operation:?}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const U32_MAX: u64 = u32::MAX as u64;
+
+    #[test]
+    fn usize_within_rejects_values_past_a_32_bit_width() {
+        assert_eq!(usize_within(0, U32_MAX), Some(0));
+        assert_eq!(usize_within(U32_MAX, U32_MAX), Some(u32::MAX as usize));
+        assert_eq!(usize_within(U32_MAX + 1, U32_MAX), None);
+        assert_eq!(usize_within(4_294_967_296, U32_MAX), None);
+        assert_eq!(usize_within(u64::MAX, U32_MAX), None);
+    }
+
+    #[test]
+    fn usize_within_matches_host_maximum() {
+        assert_eq!(
+            usize_within(u64::MAX, u64::MAX),
+            usize::try_from(u64::MAX).ok()
+        );
+    }
+
+    #[test]
+    fn slice_length_past_usize_is_out_of_range_not_wrapped_to_empty() {
+        let context = ExecutionContext::unrestricted();
+        let args = |length: u64| {
+            Map::from_iter([
+                ("items".to_owned(), Value::Array(vec![Value::from(1)])),
+                ("offset".to_owned(), Value::from(0)),
+                ("length".to_owned(), Value::from(length)),
+            ])
+        };
+        assert_eq!(
+            run("list.slice", &args(1), &context).unwrap(),
+            Value::Array(vec![Value::from(1)])
+        );
+        assert!(run("list.slice", &args(4_294_967_296), &context).is_err());
     }
 }

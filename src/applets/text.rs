@@ -1,3 +1,4 @@
+use super::list::usize_within;
 use super::{
     checkpoint_work, invalid, optional_string, required_string, AppletError, ExecutionContext,
 };
@@ -363,15 +364,19 @@ pub(super) fn shape(
             let length = args
                 .get("length")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("args.length must be a nonnegative integer"))?
-                as usize;
+                .ok_or_else(|| invalid("args.length must be a nonnegative integer"))?;
+            let length = usize_within(length, usize::MAX as u64)
+                .ok_or_else(|| invalid("substring length is out of range"))?;
             if args.get("unit").and_then(Value::as_str) == Some("bytes") {
-                let start = if start < 0 {
-                    text.len().checked_sub(start.unsigned_abs() as usize)
-                } else {
-                    Some(start as usize)
-                }
-                .ok_or_else(|| invalid("substring start is out of range"))?;
+                let start = usize_within(start.unsigned_abs(), usize::MAX as u64)
+                    .and_then(|magnitude| {
+                        if start < 0 {
+                            text.len().checked_sub(magnitude)
+                        } else {
+                            Some(magnitude)
+                        }
+                    })
+                    .ok_or_else(|| invalid("substring start is out of range"))?;
                 let end = start
                     .checked_add(length)
                     .filter(|end| *end <= text.len())
@@ -384,12 +389,15 @@ pub(super) fn shape(
                     });
             }
             let chars = text.chars().collect::<Vec<_>>();
-            let start = if start < 0 {
-                chars.len().checked_sub(start.unsigned_abs() as usize)
-            } else {
-                Some(start as usize)
-            }
-            .ok_or_else(|| invalid("substring start is out of range"))?;
+            let start = usize_within(start.unsigned_abs(), usize::MAX as u64)
+                .and_then(|magnitude| {
+                    if start < 0 {
+                        chars.len().checked_sub(magnitude)
+                    } else {
+                        Some(magnitude)
+                    }
+                })
+                .ok_or_else(|| invalid("substring start is out of range"))?;
             if start > chars.len() {
                 return Err(invalid("substring start is out of range"));
             }
@@ -579,6 +587,55 @@ pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn substring_indices_past_usize_are_out_of_range_not_wrapped() {
+        let context = ExecutionContext::unrestricted();
+        let substring = |start: i64, length: u64, unit: Option<&str>| {
+            let mut args = Map::from_iter([
+                ("text".to_owned(), Value::String("héllo".to_owned())),
+                ("start".to_owned(), Value::from(start)),
+                ("length".to_owned(), Value::from(length)),
+            ]);
+            if let Some(unit) = unit {
+                args.insert("unit".to_owned(), Value::String(unit.to_owned()));
+            }
+            shape("text.substring", &args, &[], &context)
+        };
+        assert!(substring(4_294_967_296, 1, None).is_err());
+        assert!(substring(-4_294_967_296, 1, None).is_err());
+        assert!(substring(0, 4_294_967_296, None).is_err());
+        assert!(substring(4_294_967_296, 1, Some("bytes")).is_err());
+        assert!(substring(-4_294_967_296, 1, Some("bytes")).is_err());
+        assert!(substring(0, 4_294_967_296, Some("bytes")).is_err());
+    }
+
+    #[test]
+    fn substring_boundary_cases_keep_unicode_and_byte_behavior() {
+        let context = ExecutionContext::unrestricted();
+        let substring = |start: i64, length: u64, unit: Option<&str>| {
+            let mut args = Map::from_iter([
+                ("text".to_owned(), Value::String("héllo".to_owned())),
+                ("start".to_owned(), Value::from(start)),
+                ("length".to_owned(), Value::from(length)),
+            ]);
+            if let Some(unit) = unit {
+                args.insert("unit".to_owned(), Value::String(unit.to_owned()));
+            }
+            shape("text.substring", &args, &[], &context)
+        };
+        let text = |value: &str| Value::String(value.to_owned());
+        assert_eq!(substring(1, 3, None).unwrap(), text("éll"));
+        assert_eq!(substring(-2, 2, None).unwrap(), text("lo"));
+        assert_eq!(substring(-5, 5, None).unwrap(), text("héllo"));
+        assert_eq!(substring(5, 0, None).unwrap(), text(""));
+        assert!(substring(-6, 0, None).is_err());
+        assert_eq!(substring(0, 1, Some("bytes")).unwrap(), text("h"));
+        assert_eq!(substring(1, 2, Some("bytes")).unwrap(), text("é"));
+        assert_eq!(substring(-1, 1, Some("bytes")).unwrap(), text("o"));
+        assert_eq!(substring(-6, 6, Some("bytes")).unwrap(), text("héllo"));
+        assert!(substring(2, 1, Some("bytes")).is_err());
+    }
 
     #[test]
     fn overlapping_matcher_agrees_with_character_boundary_scan() {

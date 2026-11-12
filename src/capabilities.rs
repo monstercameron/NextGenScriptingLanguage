@@ -3825,9 +3825,10 @@ pub fn authorize_network_endpoint(
 /// does not preserve it, exactly as for remote applets. Unlisted public
 /// origins are denied here too: stdin plus any `api_key_env` credential would
 /// otherwise exfiltrate to an arbitrary host. The default provider endpoint
-/// (no custom `endpoint` parameter) needs no grant: reaching the provider is
-/// the applet's declared function, and default keys already stay on the
-/// default host.
+/// (no custom `endpoint` parameter) needs no network-origin grant: reaching
+/// the provider is the applet's declared function, and default keys already
+/// stay on the default host. Its data-flow sink is still checked, by
+/// `authorize_default_model_sink`.
 ///
 /// Returns the canonical origin when the policy explicitly listed it, so the
 /// spawn site can convey the grant to the helper; `None` means allowed without
@@ -4009,7 +4010,7 @@ pub fn authorize_model_endpoint(
 
 /// Authorize the resolved custom `endpoint` parameter of an `@execute-model`
 /// applet before its child spawns. Other binaries need no check; an absent
-/// endpoint selects the provider default and needs no grant.
+/// endpoint selects the provider default, which needs no origin grant here.
 ///
 /// References resolve through `bindings`; unbound names return `Ok(None)` here
 /// and argument resolution rejects them before any spawn. A named `fixture`
@@ -4027,6 +4028,7 @@ pub fn authorize_model_endpoint_params(
         return Ok(None);
     }
     let Some(value) = parameters.get("endpoint") else {
+        authorize_default_model_sink(registry, manifest, parameters, bindings, sensitivities)?;
         return Ok(None);
     };
     let text = match value {
@@ -4048,6 +4050,86 @@ pub fn authorize_model_endpoint_params(
         sensitivities,
         allow_loopback,
     )
+}
+
+/// Provider default endpoints of the bundled `execute-model` helper, used when a
+/// call names no `endpoint`. They must equal `JEV_ENDPOINT` and `OPENAI_ENDPOINT`
+/// in `src/models.rs`; that module's tests pin the same literals. This table is
+/// not feature-gated, so the data-flow check holds in every build.
+const MODEL_PROVIDER_DEFAULT_ENDPOINTS: [(&str, &str); 2] = [
+    ("jev", "https://api.typesafe.ai/v1/systemone"),
+    ("openai", "https://api.openai.com/v1/responses"),
+];
+
+/// Authorize the data-flow sink of a model call that uses the provider default
+/// endpoint (no `endpoint` parameter). The request body and any provider key
+/// travel to the provider's default origin, so an active data-flow policy must
+/// grant the call's labels there. Hermetic `fixture` replays never open a
+/// socket and are not checked.
+///
+/// The provider and any `--endpoint` are read from the argv the helper will
+/// receive. Every named provider's default origin and every `--endpoint` value
+/// are checked, so the decision covers whichever destination the helper uses.
+fn authorize_default_model_sink(
+    registry: &Registry,
+    manifest: &crate::manifest::Manifest,
+    parameters: &BTreeMap<String, Value>,
+    bindings: &BTreeMap<String, Value>,
+    sensitivities: &SensitivitySet,
+) -> Result<()> {
+    let hermetic = parameters.contains_key("fixture");
+    if hermetic || !crate::security::data_flow_policy_active(registry) {
+        return Ok(());
+    }
+    let mut values = BTreeMap::new();
+    for (name, value) in parameters {
+        let resolved = match value {
+            Value::Reference(binding) => match bindings.get(binding) {
+                Some(bound) => bound.clone(),
+                None => bail!("model parameter {name:?} references an unbound name"),
+            },
+            other => other.clone(),
+        };
+        values.insert(name.clone(), resolved);
+    }
+    let argv = manifest.build_arguments(&values)?;
+    let mut providers: Vec<&str> = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--provider")
+        .map(|pair| pair[1].as_str())
+        .collect();
+    // The helper's own default provider when no `--provider` argument is given.
+    if providers.is_empty() {
+        providers.push("jev");
+    }
+    for provider in providers {
+        // Unknown provider names are refused by the helper's argument parser
+        // before any socket opens, so only the known defaults need a sink.
+        if let Some((_, endpoint)) = MODEL_PROVIDER_DEFAULT_ENDPOINTS
+            .iter()
+            .find(|(name, _)| *name == provider)
+        {
+            crate::security::authorize_data_flow_set(
+                registry,
+                &manifest.name,
+                endpoint,
+                sensitivities,
+            )?;
+        }
+    }
+    for endpoint in argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--endpoint")
+        .map(|pair| pair[1].as_str())
+    {
+        crate::security::authorize_data_flow_set(
+            registry,
+            &manifest.name,
+            endpoint,
+            sensitivities,
+        )?;
+    }
+    Ok(())
 }
 
 /// Environment variable carrying one explicitly granted model origin to the

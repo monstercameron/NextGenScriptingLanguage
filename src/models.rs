@@ -2541,6 +2541,13 @@ mod unit_tests {
     }
 
     #[test]
+    fn issue_375_default_endpoints_match_the_data_flow_table() {
+        // `MODEL_PROVIDER_DEFAULT_ENDPOINTS` in capabilities.rs must stay in step.
+        assert_eq!(JEV_ENDPOINT, "https://api.typesafe.ai/v1/systemone");
+        assert_eq!(OPENAI_ENDPOINT, "https://api.openai.com/v1/responses");
+    }
+
+    #[test]
     fn granted_origin_match_is_exact_and_never_blanket() {
         use std::ffi::OsStr;
         assert!(granted_origin_matches(

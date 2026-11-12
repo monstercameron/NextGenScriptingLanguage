@@ -238,7 +238,9 @@ before discovery or invocation; redirects and environment proxies are disabled.
 A remote applet's bearer-file path is checked against that applet's own
 filesystem read grant. A custom model endpoint is authorized the same way
 before its child spawns, including the data-flow sink check for the call's
-sensitivity; the default provider endpoint needs no grant.
+sensitivity. The default provider endpoint needs no network-origin grant, but
+when a data-flow policy is active the call's sensitivity labels must be granted
+at the provider's origin, like any other remote sink.
 
 SSRF protection is fail-closed at two layers for host-managed remote applets
 and the model helper. Before any resolution or socket use, a non-public

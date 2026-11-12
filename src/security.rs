@@ -1190,6 +1190,12 @@ pub fn authorize_data_flow(
     )
 }
 
+/// Whether a data-flow policy is configured. Without one, remote egress keeps
+/// its legacy behavior and callers skip the decision record.
+pub fn data_flow_policy_active(registry: &Registry) -> bool {
+    registry.host_state::<DataFlowPolicy>().active
+}
+
 /// Authorize a remote sink against every label known to contribute to it.
 /// Unknown and a known confidential label remain separate exact grants.
 pub fn authorize_data_flow_set(
@@ -3799,6 +3805,100 @@ mod tests {
             decisions[1].reason,
             PolicyDecisionReason::UnclassifiedDataDenied
         );
+    }
+
+    /// Loads two inline model applets, one per default provider, so the
+    /// default-endpoint sink check runs against real manifests without reading
+    /// the repository's manifest folder.
+    fn issue_375_model_registry(temp: &tempfile::TempDir) -> Registry {
+        for (file, name, provider) in [
+            ("jev.json", "jev.test", "jev"),
+            ("openai.json", "openai.test", "openai"),
+        ] {
+            std::fs::write(
+                temp.path().join(file),
+                format!(
+                    r#"{{"name":"{name}","binary":"@execute-model","accepts_stdin":true,"cacheable":false,"parameters":{{"question":{{"type":"string","required":true}}}},"arguments":[{{"literal":"classify"}},{{"literal":"--provider"}},{{"literal":"{provider}"}},{{"literal":"--question"}},{{"parameter":"question"}}]}}"#
+                ),
+            )
+            .unwrap();
+        }
+        Registry::load(temp.path()).unwrap()
+    }
+
+    #[test]
+    fn issue_375_default_model_endpoint_is_a_data_flow_sink() {
+        use crate::ast::Value;
+        use std::collections::BTreeMap;
+        let temp = tempfile::tempdir().unwrap();
+        let registry = issue_375_model_registry(&temp);
+        let jev = registry.resolve("jev.test").unwrap().clone();
+        let openai = registry.resolve("openai.test").unwrap().clone();
+        let question =
+            BTreeMap::from([("question".to_owned(), Value::String("pick one".to_owned()))]);
+        let no_bindings = BTreeMap::new();
+        let unknown = SensitivitySet::from_label(Sensitivity::Unknown);
+        let public = SensitivitySet::from_label(Sensitivity::Public);
+
+        // Without a data-flow policy the legacy behavior is kept and nothing is recorded.
+        assert!(crate::capabilities::authorize_model_endpoint_params(
+            &registry,
+            &jev,
+            &question,
+            &no_bindings,
+            &unknown
+        )
+        .unwrap()
+        .is_none());
+        assert!(policy_decisions(&registry).is_empty());
+
+        registry.set_host_state(policy(
+            r#"{"version":1,"remote_sinks":{"https://api.typesafe.ai":{"allow":["public"]}}}"#,
+        ));
+        // Unknown data (for example a file read) is refused before any spawn.
+        let denied = crate::capabilities::authorize_model_endpoint_params(
+            &registry,
+            &jev,
+            &question,
+            &no_bindings,
+            &unknown,
+        )
+        .unwrap_err();
+        assert_eq!(
+            denied.downcast_ref::<PolicyError>(),
+            Some(&PolicyError::DataFlowDenied)
+        );
+        assert!(crate::capabilities::authorize_model_endpoint_params(
+            &registry,
+            &jev,
+            &question,
+            &no_bindings,
+            &public
+        )
+        .is_ok());
+        // A grant for the jev origin does not cover the openai default origin.
+        assert!(crate::capabilities::authorize_model_endpoint_params(
+            &registry,
+            &openai,
+            &question,
+            &no_bindings,
+            &public
+        )
+        .is_err());
+        // A hermetic fixture replay never opens a socket, so it is not a sink.
+        let mut fixture = question.clone();
+        fixture.insert(
+            "fixture".to_owned(),
+            Value::String("replay.json".to_owned()),
+        );
+        assert!(crate::capabilities::authorize_model_endpoint_params(
+            &registry,
+            &jev,
+            &fixture,
+            &no_bindings,
+            &unknown
+        )
+        .is_ok());
     }
 
     #[test]

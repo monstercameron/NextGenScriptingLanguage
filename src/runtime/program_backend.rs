@@ -9,6 +9,7 @@ use super::{
     configured_inputs, run_finite_inner, CallSite, FiniteRun, GroupOutput, Input, LaunchEnv,
     Program, RunOptions,
 };
+use crate::ast::{OutputDeclaration, OutputType};
 use crate::modules::LoadedProgramSource;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
@@ -133,6 +134,8 @@ pub(super) fn execute(
             options.max_output_bytes
         );
     }
+    check_declared_output(loaded.program.output.as_ref(), &child.output)
+        .with_context(|| format!("line {line}: validating program module output"))?;
     // Decode here so malformed module output fails at the module boundary. The
     // ordinary applet result path still uses the declared status/outcome rules.
     let status = manifest
@@ -173,4 +176,97 @@ pub(super) fn execute(
             None,
         )],
     })
+}
+
+/// Check a program's final value against its `produce` declaration. A program
+/// without a declaration is accepted unchanged.
+fn check_declared_output(declared: Option<&OutputDeclaration>, output: &[u8]) -> Result<()> {
+    let Some(declaration) = declared else {
+        return Ok(());
+    };
+    if output_matches_type(declaration.kind, output) {
+        return Ok(());
+    }
+    bail!(
+        "output_type_mismatch: program declares produce {} but its final value is {}",
+        declaration.kind.label(),
+        actual_output_label(output)
+    )
+}
+
+fn output_matches_type(kind: OutputType, output: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(output) else {
+        return false;
+    };
+    let trimmed = text.trim();
+    match kind {
+        OutputType::Text => true,
+        OutputType::Integer => trimmed.parse::<i64>().is_ok(),
+        OutputType::Boolean => matches!(trimmed, "true" | "false"),
+        OutputType::TextList => serde_json::from_str::<Vec<String>>(trimmed).is_ok(),
+        OutputType::Json => serde_json::from_str::<serde_json::Value>(trimmed).is_ok(),
+        OutputType::None => trimmed.is_empty(),
+    }
+}
+
+/// The closest declarable type for a final value, used in mismatch messages.
+fn actual_output_label(output: &[u8]) -> &'static str {
+    let Ok(text) = std::str::from_utf8(output) else {
+        return "bytes";
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        "none"
+    } else if trimmed.parse::<i64>().is_ok() {
+        OutputType::Integer.label()
+    } else if matches!(trimmed, "true" | "false") {
+        OutputType::Boolean.label()
+    } else {
+        OutputType::Text.label()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declared(kind: OutputType) -> OutputDeclaration {
+        OutputDeclaration {
+            kind,
+            description: None,
+            line: 1,
+        }
+    }
+
+    #[test]
+    fn declared_integer_rejects_text_and_names_both_types() {
+        let error = check_declared_output(Some(&declared(OutputType::Integer)), b"hello\n")
+            .expect_err("text is not a declared integer");
+        let message = format!("{error:#}");
+        assert!(message.contains("output_type_mismatch"), "{message}");
+        assert!(message.contains("produce integer"), "{message}");
+        assert!(message.contains("final value is text"), "{message}");
+    }
+
+    #[test]
+    fn declared_types_accept_matching_final_values() {
+        assert!(check_declared_output(Some(&declared(OutputType::Integer)), b"42\n").is_ok());
+        assert!(check_declared_output(Some(&declared(OutputType::Boolean)), b"true\n").is_ok());
+        assert!(check_declared_output(Some(&declared(OutputType::Text)), b"any text").is_ok());
+        assert!(check_declared_output(
+            Some(&declared(OutputType::TextList)),
+            b"[\"ok\", \"degraded\"]"
+        )
+        .is_ok());
+        assert!(check_declared_output(Some(&declared(OutputType::Json)), b"{\"a\":1}").is_ok());
+        assert!(check_declared_output(Some(&declared(OutputType::None)), b"\n").is_ok());
+    }
+
+    #[test]
+    fn undeclared_output_is_accepted_and_invalid_utf8_is_refused() {
+        assert!(check_declared_output(None, b"hello").is_ok());
+        let error = check_declared_output(Some(&declared(OutputType::Text)), &[0xff, 0xfe])
+            .expect_err("invalid UTF-8 is not text");
+        assert!(format!("{error:#}").contains("final value is bytes"));
+    }
 }

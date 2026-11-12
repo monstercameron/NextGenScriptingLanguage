@@ -120,6 +120,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "referencesProvider": true,
                         "renameProvider": { "prepareProvider": true },
                         "codeActionProvider": { "codeActionKinds": ["quickfix"] },
+                        "documentSymbolProvider": true,
                     "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
                     },
                     "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
@@ -304,6 +305,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             "textDocument/prepareRename" => Some(prepare_rename(&params, &documents)),
             "textDocument/rename" => Some(rename(&params, &documents)),
             "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
+            "textDocument/documentSymbol" => Some(document_symbols(&params, &documents)),
             _ if id.is_some() => {
                 write_error(
                     &mut writer,
@@ -3433,6 +3435,106 @@ fn references(params: &JsonValue, documents: &BTreeMap<String, Document>) -> Jso
     json!(locations)
 }
 
+fn document_symbols(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    json!(document_symbols_in(&document.text))
+}
+
+/// One Function symbol per reusable program definition (its labelled steps are
+/// children) and one Key symbol per labelled top-level step. Labels inside nested
+/// blocks are not reported. Symbols are ordered by their line.
+fn document_symbols_in(source: &str) -> Vec<JsonValue> {
+    let Ok(raw) = crate::parser::parse_raw(source) else {
+        return Vec::new();
+    };
+    let mut symbols = Vec::new();
+    for (name, definition) in raw
+        .definitions
+        .iter()
+        .filter(|(name, _)| !name.starts_with(crate::parser::PROGRAM_FILE_PREFIX))
+    {
+        let Some(line) = definition.line.checked_sub(1) else {
+            continue;
+        };
+        let last_line = definition
+            .steps
+            .iter()
+            .filter_map(|step| step.line.checked_sub(1))
+            .fold(line, usize::max);
+        let (Some(range), Some(selection)) = (
+            lines_range(source, line, last_line),
+            definition_name_range(source, line, name),
+        ) else {
+            continue;
+        };
+        symbols.push((
+            line,
+            json!({
+                "name": name,
+                "kind": 12,
+                "range": range,
+                "selectionRange": selection,
+                "children": labelled_step_symbols(source, &definition.steps)
+                    .into_iter()
+                    .map(|(_, symbol)| symbol)
+                    .collect::<Vec<_>>(),
+            }),
+        ));
+    }
+    symbols.extend(labelled_step_symbols(source, &raw.steps));
+    symbols.sort_by_key(|(line, _)| *line);
+    symbols.into_iter().map(|(_, symbol)| symbol).collect()
+}
+
+fn labelled_step_symbols(source: &str, steps: &[crate::ast::Step]) -> Vec<(usize, JsonValue)> {
+    steps
+        .iter()
+        .filter_map(|step| {
+            let label = step.label.as_deref()?;
+            let line = step.line.checked_sub(1)?;
+            let range = lines_range(source, line, line)?;
+            Some((
+                line,
+                json!({
+                    "name": label,
+                    "kind": 20,
+                    "range": range,
+                    "selectionRange": range,
+                    "children": [],
+                }),
+            ))
+        })
+        .collect()
+}
+
+/// The range of the name word that follows `named` on a definition's line.
+fn definition_name_range(source: &str, line: usize, name: &str) -> Option<JsonValue> {
+    let words = lexical_words(source);
+    let index = (0..words.len()).find(|&index| {
+        words[index].line == line + 1
+            && word_eq(source, &words, index, "named")
+            && word_eq(source, &words, index + 1, name)
+    })?;
+    let word = words.get(index + 1)?;
+    Some(range_from_offsets(source, word.text_start, word.text_end))
+}
+
+/// The range from the first character of line `first` to the end of line `last`
+/// (0-based lines); columns are UTF-16 code units.
+fn lines_range(source: &str, first: usize, last: usize) -> Option<JsonValue> {
+    let (start, _) = line_bounds(source, first)?;
+    let (_, end) = line_bounds(source, last)?;
+    Some(range_from_offsets(source, start, end))
+}
+
 fn prepare_rename(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
     let Some((uri, position)) = text_document_position(params) else {
         return JsonValue::Null;
@@ -3832,6 +3934,31 @@ mod tests {
         assert!(process.contains("`process`"), "{process}");
         assert!(process.contains("cannot be stated"), "{process}");
         assert!(step_effects_markdown(source, "demo.program", 1, &registry).is_none());
+    }
+
+    #[test]
+    fn document_symbols_list_definitions_and_labelled_steps_in_utf16() {
+        let source = "define a program named emit\n  greet: use value \"hi\"\n  use value \"bye\"\ntop: use value \"\u{1F600}\"\nrun program emit\n";
+        let symbols = document_symbols_in(source);
+        assert_eq!(symbols.len(), 2, "{symbols:?}");
+        let definition = &symbols[0];
+        assert_eq!(definition["name"], "emit");
+        assert_eq!(definition["kind"], 12);
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        assert_eq!(definition["range"]["end"]["line"], 2);
+        // "define a program named " is 23 UTF-16 units, so the name spans 23..27.
+        assert_eq!(definition["selectionRange"]["start"]["character"], 23);
+        assert_eq!(definition["selectionRange"]["end"]["character"], 27);
+        let children = definition["children"].as_array().unwrap();
+        assert_eq!(children.len(), 1, "{children:?}");
+        assert_eq!(children[0]["name"], "greet");
+        assert_eq!(children[0]["kind"], 20);
+        assert_eq!(children[0]["range"]["start"]["line"], 1);
+        let top = &symbols[1];
+        assert_eq!(top["name"], "top");
+        assert_eq!(top["range"]["start"]["line"], 3);
+        // The emoji is two UTF-16 code units: `top: use value "` is 15, plus 1 quote, plus 2, plus 1.
+        assert_eq!(top["range"]["end"]["character"], 19);
     }
 
     fn request(id: u64, method: &str, params: JsonValue) -> JsonValue {

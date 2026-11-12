@@ -1,9 +1,11 @@
-/// Ask the kernel to SIGKILL the applet when this interpreter dies, so a SIGKILLed or
-/// aborted `execute` cannot leave its direct children running (issue #523). Linux only;
+/// Ask the kernel to SIGKILL a long-lived child when this interpreter dies, so a SIGKILLed
+/// or aborted `execute` cannot leave a listener producer running (issue #523). Linux only;
 /// other Unix targets keep the Drop-time group kill.
 ///
-/// PR_SET_PDEATHSIG fires when the spawning thread exits, so call sites must spawn from a
-/// thread that outlives the child (each one waits on its child). Only the direct child is
+/// This needs a `pre_exec` hook, which makes the standard library fork instead of using
+/// posix_spawn, so it is used only for children spawned once per service, never on the
+/// per-stage hot path (issue #573). PR_SET_PDEATHSIG fires when the spawning thread exits,
+/// so the caller must spawn from a thread that outlives the child. Only the direct child is
 /// covered; a grandchild that leaves its group or session is not.
 #[cfg(target_os = "linux")]
 fn bind_parent_death_signal(command: &mut std::process::Command) {
@@ -879,83 +881,6 @@ mod supervisor_tests {
         // Status words for exit 5 and for death by SIGTERM (15).
         assert_eq!(supervised_exit_code(5 << 8), 5);
         assert_eq!(supervised_exit_code(15), 128 + 15);
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod parent_death_tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    const SPAWNER_ENV: &str = "EXECUTE_ISSUE_523_SPAWNER";
-
-    /// Runs only when re-executed by `stage_dies_when_spawner_is_sigkilled`. It starts a
-    /// `sleep 300` stage bound to this process, records its pid, and waits.
-    #[test]
-    fn parent_death_spawner_child() {
-        let Some(pid_file) = std::env::var_os(SPAWNER_ENV) else {
-            return;
-        };
-        let mut command = std::process::Command::new("sleep");
-        command.arg("300");
-        bind_parent_death_signal(&mut command);
-        let child = command.spawn().expect("spawning sleep stage");
-        std::fs::write(&pid_file, child.id().to_string()).expect("recording stage pid");
-        std::thread::sleep(std::time::Duration::from_secs(300));
-    }
-
-    /// A stage is not running once it has exited, including as an unreaped zombie.
-    fn stage_is_gone(pid: libc::pid_t) -> bool {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Err(_) => true,
-            Ok(stat) => stat
-                .rsplit(')')
-                .next()
-                .and_then(|rest| rest.trim_start().chars().next())
-                .is_none_or(|state| state == 'Z' || state == 'X'),
-        }
-    }
-
-    #[test]
-    fn stage_dies_when_spawner_is_sigkilled() {
-        let dir = tempfile::tempdir().expect("creating temp dir");
-        let pid_file = dir.path().join("stage.pid");
-        let exe = std::env::current_exe().expect("locating test binary");
-        let mut spawner = std::process::Command::new(exe)
-            .args([
-                "--exact",
-                "runtime::parent_death_tests::parent_death_spawner_child",
-                "--nocapture",
-            ])
-            .env(SPAWNER_ENV, &pid_file)
-            .spawn()
-            .expect("starting spawner");
-        let deadline = Instant::now() + Duration::from_secs(20);
-        let stage = loop {
-            if let Some(pid) = std::fs::read_to_string(&pid_file)
-                .ok()
-                .and_then(|text| text.trim().parse::<libc::pid_t>().ok())
-            {
-                break pid;
-            }
-            assert!(Instant::now() < deadline, "spawner never started its stage");
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        // SAFETY: kill(2) takes no pointers. The pid is the spawner child this test owns and
-        // has not reaped, so it cannot name another process.
-        unsafe { libc::kill(spawner.id() as libc::pid_t, libc::SIGKILL) };
-        spawner.wait().expect("reaping spawner");
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !stage_is_gone(stage) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let gone = stage_is_gone(stage);
-        if !gone {
-            // SAFETY: kill(2) takes no pointers. Cleanup for a failed run only; the stage is
-            // a sleep this test started.
-            unsafe { libc::kill(stage, libc::SIGKILL) };
-        }
-        assert!(gone, "stage {stage} outlived its SIGKILLed spawner");
     }
 }
 

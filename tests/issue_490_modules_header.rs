@@ -78,3 +78,36 @@ fn catalog_applet_shadowing_a_shipped_applet_is_refused() {
 fn catalog_with_new_names_is_accepted() {
     ensure_no_shadowed_applets(&["wait", "echo"], &["examples.records.report"]).unwrap();
 }
+
+#[test]
+fn example_caller_checks_without_a_manifest_flag() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["check", "examples/modules/caller.program"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("unknown applet"), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[test]
+fn program_header_pointing_outside_its_tree_is_refused_by_check() {
+    let base = tempfile::tempdir().unwrap();
+    let tree = base.path().join("tree");
+    fs::create_dir_all(&tree).unwrap();
+    fs::create_dir_all(base.path().join("outside")).unwrap();
+    let program = tree.join("caller.program");
+    fs::write(
+        &program,
+        "# execute-modules: ../outside\naccept payload as json\n",
+    )
+    .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("check")
+        .arg(&program)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("must not contain `..`"), "{stderr}");
+}

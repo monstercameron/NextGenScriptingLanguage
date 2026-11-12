@@ -1,3 +1,4 @@
+# execute-modules: .
 accept payload as json
 run examples.records.report with payload payload as report
 then encode report as json

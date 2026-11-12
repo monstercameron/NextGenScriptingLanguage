@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Parse command line arguments. `None` means help or version was printed.
 pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
@@ -659,6 +659,22 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
             "--fix writes the program file back, so it cannot read the program from standard input"
         );
     }
+    if manifest_dir.is_none() && manifest_catalog.is_none() && !stdin && file.is_file() {
+        // A program may name its own module catalog in a leading `# execute-modules:`
+        // header. An explicit --manifest-dir or --manifest-catalog still wins.
+        if let Ok(source) = std::fs::read_to_string(&file) {
+            if let Some(relative) = flow::manifest::execute_modules_header(&source)? {
+                let program_dir = match file.parent() {
+                    Some(dir) if !dir.as_os_str().is_empty() => dir,
+                    _ => Path::new("."),
+                };
+                manifest_dir = Some(flow::manifest::resolve_execute_modules_dir(
+                    program_dir,
+                    &relative,
+                )?);
+            }
+        }
+    }
     if json_compact && github {
         bail!("--json=compact cannot be combined with --format github");
     }
@@ -893,5 +909,64 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(parse_args(&arguments).is_err());
         }
+    }
+
+    #[test]
+    fn program_header_supplies_its_module_catalog_without_a_flag() {
+        let base = tempfile::tempdir().expect("temp dir");
+        let catalog = base.path().join("catalog");
+        std::fs::create_dir_all(&catalog).expect("catalog dir");
+        let program = base.path().join("caller.program");
+        std::fs::write(
+            &program,
+            "# execute-modules: ./catalog\naccept payload as json\n",
+        )
+        .expect("program");
+        let arguments = vec!["check".to_owned(), program.display().to_string()];
+        let parsed = parse_args(&arguments)
+            .expect("arguments parse")
+            .expect("check arguments");
+        let resolved = parsed.manifest_dir.expect("header catalog");
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(&catalog).expect("canonical catalog")
+        );
+    }
+
+    #[test]
+    fn program_header_pointing_outside_the_tree_is_refused() {
+        let base = tempfile::tempdir().expect("temp dir");
+        let tree = base.path().join("tree");
+        std::fs::create_dir_all(&tree).expect("tree dir");
+        std::fs::create_dir_all(base.path().join("outside")).expect("outside dir");
+        let program = tree.join("caller.program");
+        std::fs::write(
+            &program,
+            "# execute-modules: ../outside\naccept payload as json\n",
+        )
+        .expect("program");
+        let arguments = vec!["check".to_owned(), program.display().to_string()];
+        assert!(parse_args(&arguments).is_err());
+    }
+
+    #[test]
+    fn explicit_manifest_dir_overrides_the_program_header() {
+        let base = tempfile::tempdir().expect("temp dir");
+        let program = base.path().join("caller.program");
+        std::fs::write(
+            &program,
+            "# execute-modules: ./missing\naccept payload as json\n",
+        )
+        .expect("program");
+        let arguments = vec![
+            "check".to_owned(),
+            "--manifest-dir".to_owned(),
+            base.path().display().to_string(),
+            program.display().to_string(),
+        ];
+        let parsed = parse_args(&arguments)
+            .expect("arguments parse")
+            .expect("check arguments");
+        assert_eq!(parsed.manifest_dir.as_deref(), Some(base.path()));
     }
 }

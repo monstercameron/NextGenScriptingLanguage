@@ -25,6 +25,11 @@ pub struct GraphCheckpointState {
     pub interrupted: Vec<InterruptedNode>,
 }
 
+/// The largest encoded completion record a graph journal accepts for one node. The
+/// same limit is enforced by the journal on write; a checkpointed node's held outputs
+/// are charged against it as they are emitted (see `transport.rs`).
+pub(crate) const MAX_NODE_RECORD_BYTES: usize = 16 * 1024 * 1024;
+
 /// One node's completion record. Its position in [`GraphCheckpointState::completed`]
 /// is its completion order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

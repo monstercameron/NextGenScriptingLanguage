@@ -401,7 +401,7 @@ pub struct NodeIo {
     input_sensitivity: Option<SensitivitySet>,
     max_message_bytes: usize,
     /// Outputs held back while a checkpointed node runs; see `begin_recording`.
-    recording: Option<Vec<RecordedEmit>>,
+    recording: Option<HeldOutputs>,
     /// Called once, just before the node first invokes an applet.
     effects_started: Option<EffectsHook>,
 }
@@ -416,6 +416,49 @@ pub(crate) struct RecordedEmit {
     pub port: String,
     pub payload: PortValue,
     pub sensitivity: SensitivitySet,
+}
+
+/// Bytes reserved in a node's completed record for its node id, fingerprint and
+/// JSON framing. The node id is charged at its worst-case escaped length on top.
+const HELD_RECORD_FRAME_BYTES: usize = 4096;
+
+/// The outputs a checkpointed node has emitted so far, with the encoded bytes they
+/// will add to its completed record. The budget is charged as each output arrives,
+/// so the held buffer cannot pass the record limit.
+#[derive(Debug, Default)]
+struct HeldOutputs {
+    emits: Vec<RecordedEmit>,
+    /// Record bytes still free for outputs.
+    remaining: usize,
+}
+
+/// Writes JSON into a fixed byte budget without keeping the bytes. Serialization stops
+/// at the first write that does not fit, so measuring an output stays bounded.
+struct RecordBudget {
+    remaining: usize,
+}
+
+impl std::io::Write for RecordBudget {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.remaining = self
+            .remaining
+            .checked_sub(buffer.len())
+            .ok_or_else(|| std::io::Error::other("checkpoint record budget exhausted"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Borrowed form of [`super::checkpoint::RecordedOutput`]. It has the same fields in
+/// the same order, so it encodes to the bytes that record will hold.
+#[derive(Serialize)]
+struct HeldOutputShape<'a> {
+    port: &'a str,
+    payload: &'a PortValue,
+    sensitivity: &'a SensitivitySet,
 }
 
 /// The executor for a plan with renderer nodes. Only the desktop feature has the
@@ -826,14 +869,25 @@ impl NodeIo {
     /// matching `finish_recording`. Checkpointed nodes do this so that a node's
     /// outputs reach downstream nodes only after its completion is recorded.
     pub(crate) fn begin_recording(&mut self, effects_started: EffectsHook) {
-        self.recording = Some(Vec::new());
+        let frame = self
+            .node
+            .len()
+            .saturating_mul(6)
+            .saturating_add(HELD_RECORD_FRAME_BYTES);
+        self.recording = Some(HeldOutputs {
+            emits: Vec::new(),
+            remaining: super::checkpoint::MAX_NODE_RECORD_BYTES.saturating_sub(frame),
+        });
         self.effects_started = Some(effects_started);
     }
 
     /// Stop holding outputs and return them in emission order.
     pub(crate) fn finish_recording(&mut self) -> Vec<RecordedEmit> {
         self.effects_started = None;
-        self.recording.take().unwrap_or_default()
+        self.recording
+            .take()
+            .map(|held| held.emits)
+            .unwrap_or_default()
     }
 
     /// Note that the node is about to invoke an applet. The first call runs the
@@ -897,14 +951,34 @@ impl NodeIo {
             labels
         });
         // A held-back output takes no sequence number until it is delivered.
-        if let Some(recording) = self.recording.as_mut() {
+        if let Some(held) = self.recording.as_mut() {
             if remote.is_some() {
                 bail!(
                     "remote events from node {:?} cannot be checkpointed",
                     self.node
                 );
             }
-            recording.push(RecordedEmit {
+            // Charge this output's encoded size, plus the array separator, before it is
+            // held. The check fails at the output that would overflow the record limit.
+            let mut budget = RecordBudget {
+                remaining: held.remaining,
+            };
+            let shape = HeldOutputShape {
+                port,
+                payload: &payload,
+                sensitivity: &sensitivity,
+            };
+            let charged = std::io::Write::write(&mut budget, b",")
+                .ok()
+                .and_then(|_| serde_json::to_writer(&mut budget, &shape).ok());
+            if charged.is_none() {
+                bail!(
+                    "node {:?} holds more output than the 16 MiB checkpoint record limit allows; its completed record would exceed it",
+                    self.node
+                );
+            }
+            held.remaining = budget.remaining;
+            held.emits.push(RecordedEmit {
                 port: port.to_owned(),
                 payload,
                 sensitivity,
@@ -4441,6 +4515,37 @@ mod emit_fanout_tests {
             remote,
             payload,
         }
+    }
+
+    #[test]
+    fn held_outputs_fail_at_checkpoint_record_limit_before_growing_past_it() {
+        let (_scope, mut io, _queues) = test_io(
+            &[(BufferPolicy::Lossless, 1)],
+            value_schema(OutputType::Bytes),
+            usize::MAX,
+        );
+        io.begin_recording(Arc::new(|| Ok(())));
+
+        // Zero bytes encode as "0," in the record, so each 1 MiB output costs 2 MiB.
+        let mut accepted = 0usize;
+        let mut failure = None;
+        for _ in 0..40 {
+            match io.emit("out", PortValue::Bytes(vec![0; 1024 * 1024])) {
+                Ok(_) => accepted += 1,
+                Err(error) => {
+                    failure = Some(error.to_string());
+                    break;
+                }
+            }
+        }
+        let message = failure.expect("held outputs past the record limit must fail");
+        assert!(
+            message.contains("16 MiB checkpoint record limit"),
+            "{message}"
+        );
+        assert!((1..=8).contains(&accepted), "accepted {accepted} outputs");
+        let held = io.finish_recording();
+        assert_eq!(held.len(), accepted);
     }
 
     #[test]

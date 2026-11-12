@@ -3335,6 +3335,7 @@ fn hover(
     let program_path =
         local_file_path(uri).map_or_else(|| uri.to_owned(), |path| path.display().to_string());
     let effects = step_effects_markdown(&document.text, &program_path, position.line + 1, registry);
+    let binding = binding_hover_markdown(&document.text, offset, &program_path);
     if let Some(manifest) = manifest_at(&document.text, offset, manifests) {
         let contract = manifest.contract();
         let details = json!({
@@ -3352,12 +3353,82 @@ fn hover(
         if let Some(effects) = &effects {
             value = format!("{effects}\n\n{value}");
         }
+        if let Some(binding) = &binding {
+            value = format!("{binding}\n\n{value}");
+        }
         return json!({ "contents": { "kind": "markdown", "value": value } });
     }
-    effects.map_or(
-        JsonValue::Null,
-        |value| json!({ "contents": { "kind": "markdown", "value": value } }),
-    )
+    let value = match (binding, effects) {
+        (Some(binding), Some(effects)) => format!("{binding}\n\n{effects}"),
+        (Some(binding), None) => binding,
+        (None, Some(effects)) => effects,
+        (None, None) => return JsonValue::Null,
+    };
+    json!({ "contents": { "kind": "markdown", "value": value } })
+}
+
+/// Markdown naming the binding at `offset`: its kind and the line that introduces
+/// it. A declared input also states its type and its `described as` text, rendered
+/// by the same `help` describer the command-line help uses.
+fn binding_hover_markdown(source: &str, offset: usize, program_path: &str) -> Option<String> {
+    let site = binding_site_at(source, offset)?;
+    let mut value = format!(
+        "`{}` is {}, introduced at line {}.",
+        site.name,
+        binding_kind_phrase(site.kind),
+        site.line
+    );
+    if site.kind == "input" {
+        let program = crate::parser::parse(source).ok()?;
+        let input = program
+            .inputs
+            .iter()
+            .chain(
+                program
+                    .definitions
+                    .values()
+                    .flat_map(|definition| definition.inputs.iter()),
+            )
+            .find(|input| input.name == site.name && input.line == site.line)?;
+        let mut view = program.clone();
+        view.inputs = vec![input.clone()];
+        let help = crate::agent::help::describe(&view, program_path);
+        let entry = &help["inputs"][0];
+        if let Some(kind) = entry["type"].as_str() {
+            value.push_str(&format!(" Type: {}.", escape_markdown(kind)));
+        }
+        if let Some(description) = entry["description"].as_str() {
+            value.push_str(&format!("\n\n{}", escape_markdown(description)));
+        }
+    }
+    Some(value)
+}
+
+/// The English phrase for a binding kind, as the hover names it.
+fn binding_kind_phrase(kind: &str) -> &'static str {
+    match kind {
+        "result" => "a step result",
+        "input" => "a declared input",
+        "loop variable" => "a loop variable",
+        "task" => "a task name",
+        "job" => "a job name",
+        "status" => "a status binding",
+        "error" => "an error binding",
+        "scope" => "a temporary scope name",
+        _ => "a binding",
+    }
+}
+
+/// Escapes the Markdown characters that would start markup in a hover paragraph.
+fn escape_markdown(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn manifest_at<'a>(
@@ -3453,6 +3524,72 @@ fn binding_name_location(source: &str, line: usize, name: &str) -> Option<Symbol
     })
 }
 
+/// A binding name at a position, resolved to the introduction it refers to.
+struct BindingSite {
+    name: String,
+    /// The line of the introduction and its kind (see `diagnostics::binding_introductions`).
+    line: usize,
+    kind: &'static str,
+    /// The introducing occurrence of the name on the introduction's line.
+    declaration: SymbolLocation,
+    /// The line of the next introduction of the same name after `line`, if any.
+    next_line: Option<usize>,
+}
+
+/// The binding named by the word at `offset`, resolved as `binding_definition_at`
+/// resolves it, together with the span of its next introduction.
+fn binding_site_at(source: &str, offset: usize) -> Option<BindingSite> {
+    let word = lexical_words(source)
+        .into_iter()
+        .find(|word| !word.quoted && word.text_start <= offset && offset <= word.text_end)?;
+    let name = source[word.text_start..word.text_end].to_owned();
+    let program = crate::parser::parse(source).ok()?;
+    let introductions = crate::diagnostics::binding_introductions(&program);
+    let introduction = introductions
+        .iter()
+        .filter(|introduction| introduction.name == name && introduction.line <= word.line)
+        .max_by_key(|introduction| introduction.line)?;
+    let next_line = introductions
+        .iter()
+        .filter(|next| next.name == name && next.line > introduction.line)
+        .map(|next| next.line)
+        .min();
+    let declaration = binding_name_location(source, introduction.line, &name)?;
+    Some(BindingSite {
+        line: introduction.line,
+        kind: introduction.kind,
+        declaration,
+        next_line,
+        name,
+    })
+}
+
+/// The references of the binding at `offset`: each whole-word, unquoted occurrence
+/// of its name from its introduction's line up to, not including, the next
+/// introduction of the same name. Quoted text and comments are never words here.
+fn binding_references(
+    uri: &str,
+    source: &str,
+    offset: usize,
+    include_declaration: bool,
+) -> JsonValue {
+    let Some(site) = binding_site_at(source, offset) else {
+        return JsonValue::Null;
+    };
+    let locations = lexical_words(source)
+        .into_iter()
+        .filter(|word| {
+            !word.quoted
+                && word.line >= site.line
+                && site.next_line.is_none_or(|next| word.line < next)
+                && source[word.text_start..word.text_end] == site.name
+                && (include_declaration || word.text_start != site.declaration.start)
+        })
+        .map(|word| json!({ "uri": uri, "range": range_from_offsets(source, word.text_start, word.text_end) }))
+        .collect::<Vec<_>>();
+    json!(locations)
+}
+
 fn references(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
     let Some((uri, position)) = text_document_position(params) else {
         return JsonValue::Null;
@@ -3463,13 +3600,13 @@ fn references(params: &JsonValue, documents: &BTreeMap<String, Document>) -> Jso
     let Some(offset) = position_to_byte(&document.text, position) else {
         return JsonValue::Null;
     };
-    let Some((name, _)) = program_symbol_at(&document.text, offset) else {
-        return JsonValue::Null;
-    };
     let include_declaration = params
         .pointer("/context/includeDeclaration")
         .and_then(JsonValue::as_bool)
         .unwrap_or(true);
+    let Some((name, _)) = program_symbol_at(&document.text, offset) else {
+        return binding_references(uri, &document.text, offset, include_declaration);
+    };
     let symbol = find_program_symbol(&document.text, &name);
     let Some(symbol) = symbol else {
         return json!([]);
@@ -5600,6 +5737,166 @@ mod tests {
         let result = binding_definition_response(source, 3, 12);
         assert_eq!(result["range"]["start"]["line"], 1, "{result}");
         assert_eq!(result["range"]["start"]["character"], 23, "{result}");
+    }
+
+    fn binding_request(
+        method: &str,
+        source: &str,
+        line: u64,
+        character: u64,
+        include_declaration: bool,
+    ) -> JsonValue {
+        let uri = "file:///tmp/binding-references.program";
+        let mut input = frame(request(1, "initialize", JsonValue::Null));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "version": 1, "text": source } }
+        })));
+        input.extend(frame(request(
+            2,
+            method,
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "context": { "includeDeclaration": include_declaration }
+            }),
+        )));
+        input.extend(frame(request(3, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({ "jsonrpc": "2.0", "method": "exit" })));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        decode_frames(&output)
+            .into_iter()
+            .find(|message| message["id"] == 2)
+            .unwrap()["result"]
+            .clone()
+    }
+
+    /// The `(line, start, end)` triples of a references result, in order.
+    fn reference_spans(result: &JsonValue) -> Vec<(u64, u64, u64)> {
+        result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|location| {
+                let range = &location["range"];
+                (
+                    range["start"]["line"].as_u64().unwrap(),
+                    range["start"]["character"].as_u64().unwrap(),
+                    range["end"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn binding_references_split_two_introductions_of_one_name() {
+        // Lines are 0-based in LSP. The first `raw` binding runs from line 0 to line 1;
+        // the second introduction on line 2 starts a new binding with the same name.
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\nrun fixture.second as raw\nrun fixture.use with text raw\n";
+        let first_use = binding_request("textDocument/references", source, 1, 26, true);
+        assert_eq!(
+            reference_spans(&first_use),
+            [(0, 21, 24), (1, 26, 29)],
+            "{first_use}"
+        );
+        let second_use = binding_request("textDocument/references", source, 3, 26, true);
+        assert_eq!(
+            reference_spans(&second_use),
+            [(2, 22, 25), (3, 26, 29)],
+            "{second_use}"
+        );
+        // A position on the second introduction resolves to it, not to the first.
+        let second_intro = binding_request("textDocument/references", source, 2, 22, true);
+        assert_eq!(
+            reference_spans(&second_intro),
+            [(2, 22, 25), (3, 26, 29)],
+            "{second_intro}"
+        );
+    }
+
+    #[test]
+    fn binding_references_honour_include_declaration() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\n";
+        let without = binding_request("textDocument/references", source, 1, 26, false);
+        assert_eq!(reference_spans(&without), [(1, 26, 29)], "{without}");
+        let with = binding_request("textDocument/references", source, 1, 26, true);
+        assert_eq!(reference_spans(&with), [(0, 21, 24), (1, 26, 29)], "{with}");
+    }
+
+    #[test]
+    fn binding_references_skip_quoted_text_and_comments() {
+        let source = "run fixture.first as raw\nrun fixture.use with text \"raw and \\\"raw\\\"\" # raw here\nrun fixture.use with text raw\n";
+        let result = binding_request("textDocument/references", source, 2, 26, true);
+        assert_eq!(
+            reference_spans(&result),
+            [(0, 21, 24), (2, 26, 29)],
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn binding_references_cover_a_loop_variable_inside_its_loop() {
+        let source = "run fixture.paths as paths\nfor each path in paths\n  run fixture.text with text path\n  run fixture.text with text path\n";
+        // The loop variable is introduced on line 1 by `for each path`; its name sits at 9..13.
+        let with = binding_request("textDocument/references", source, 2, 29, true);
+        assert_eq!(
+            reference_spans(&with),
+            [(1, 9, 13), (2, 29, 33), (3, 29, 33)],
+            "{with}"
+        );
+        let without = binding_request("textDocument/references", source, 2, 29, false);
+        assert_eq!(
+            reference_spans(&without),
+            [(2, 29, 33), (3, 29, 33)],
+            "{without}"
+        );
+    }
+
+    #[test]
+    fn binding_hover_names_a_step_result_and_its_introducing_line() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\n";
+        let on_use = binding_request("textDocument/hover", source, 1, 26, true);
+        let value = on_use["contents"]["value"].as_str().unwrap_or_default();
+        assert!(
+            value.contains("`raw` is a step result, introduced at line 1."),
+            "{on_use}"
+        );
+        let on_intro = binding_request("textDocument/hover", source, 0, 21, true);
+        let value = on_intro["contents"]["value"].as_str().unwrap_or_default();
+        assert!(
+            value.contains("`raw` is a step result, introduced at line 1."),
+            "{on_intro}"
+        );
+        assert_eq!(on_intro["contents"]["kind"], "markdown", "{on_intro}");
+    }
+
+    #[test]
+    fn binding_hover_gives_a_declared_input_its_type_and_description() {
+        let source = "accept shout as text described as \"Words to shout\"\nrun fixture.text with text shout\n";
+        let result = binding_request("textDocument/hover", source, 1, 27, true);
+        let value = result["contents"]["value"].as_str().unwrap_or_default();
+        assert!(
+            value.contains("`shout` is a declared input, introduced at line 1. Type: text."),
+            "{result}"
+        );
+        assert!(value.contains("Words to shout"), "{result}");
+    }
+
+    #[test]
+    fn binding_hover_is_null_off_names_and_program_symbol_hover_is_unchanged() {
+        let source = "accept shout as text\n# just a note here\nrun fixture.text with text shout\n";
+        assert_eq!(
+            binding_request("textDocument/hover", source, 1, 3, true),
+            JsonValue::Null
+        );
+        let program = "define a program named emit\n  run printf\nrun program emit\n";
+        let result = binding_request("textDocument/hover", program, 2, 12, true);
+        assert_eq!(
+            result["contents"]["value"], "Reusable program `emit` defined at line 1.",
+            "{result}"
+        );
     }
 
     #[test]

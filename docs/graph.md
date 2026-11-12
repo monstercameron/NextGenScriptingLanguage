@@ -265,7 +265,13 @@ in the language reference).
 Retrying reruns that node only.
 
 Under checkpoints, terminal outputs come in node completion order, and within a
-node in emission order. Graph runs without checkpoints keep arrival order.
+node in emission order. Graph runs without checkpoints stream in arrival order:
+each event takes a sequence number when it is emitted, and when several terminal
+outputs have events queued, the event with the lowest sequence number is delivered
+first, whatever the plan order of the terminals. Within one terminal, events stay
+in queue order. Streaming does not wait for an earlier event from a slower terminal,
+so an event that is not yet queued when a later one is delivered comes after it.
+Collected results from `run_to_completion` are sorted by sequence number.
 
 ## Runtime limits
 

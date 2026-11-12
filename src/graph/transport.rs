@@ -269,6 +269,15 @@ impl BoundedQueue {
         Ok(item)
     }
 
+    /// Sequence number of the oldest queued event, without removing it.
+    fn front_sequence(&self) -> Result<Option<u64>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("graph queue lock poisoned"))?;
+        Ok(state.items.front().map(|event| event.sequence))
+    }
+
     fn wait_for_change(&self, timeout: Duration) {
         // Defer poison errors to the caller's next scan, after its cancellation check.
         let Ok(state) = self.state.lock() else {
@@ -1284,17 +1293,19 @@ impl GraphSession {
     /// still queued must not discard them. Once the queues are drained, the
     /// failure or cancellation is reported; a clean EOF needs both drained
     /// queues and a clean bill of health.
+    ///
+    /// When several terminals hold events, the one with the lowest sequence
+    /// number (the earliest emitted) is returned first, regardless of which
+    /// terminal comes first in the plan.
     pub fn recv_output(&mut self) -> Result<Option<EventEnvelope>> {
         loop {
             self.poll_finished_workers()?;
-            for (_, queue) in &self.terminals {
-                if let Some(event) = queue.try_recv()? {
-                    if event.generation == self.context.generation
-                        && event.revision == self.context.revision
-                    {
-                        return Ok(Some(event));
-                    }
-                }
+            if let Some(event) = next_terminal_event(
+                &self.terminals,
+                self.context.generation,
+                self.context.revision,
+            )? {
+                return Ok(Some(event));
             }
             self.cancellation_check()?;
             if self
@@ -1312,14 +1323,12 @@ impl GraphSession {
                 // delivered; any failure after this point is reported by
                 // `cancel_and_join`.
                 self.poll_finished_workers()?;
-                for (_, queue) in &self.terminals {
-                    if let Some(event) = queue.try_recv()? {
-                        if event.generation == self.context.generation
-                            && event.revision == self.context.revision
-                        {
-                            return Ok(Some(event));
-                        }
-                    }
+                if let Some(event) = next_terminal_event(
+                    &self.terminals,
+                    self.context.generation,
+                    self.context.revision,
+                )? {
+                    return Ok(Some(event));
                 }
                 self.cancellation_check()?;
                 return Ok(None);
@@ -1644,6 +1653,42 @@ impl Drop for GraphSession {
 
 fn event_size(event: &EventEnvelope) -> Result<usize> {
     payload_size(&event.payload)
+}
+
+/// Next terminal event for the current generation and revision: the queued
+/// head with the lowest sequence number across all terminal queues. Stale
+/// events are discarded as they are reached. Returns `None` when no terminal
+/// queue holds an event.
+fn next_terminal_event(
+    terminals: &[(PortRef, Arc<BoundedQueue>)],
+    generation: u64,
+    revision: u64,
+) -> Result<Option<EventEnvelope>> {
+    loop {
+        let mut next: Option<(u64, usize)> = None;
+        for (index, (_, queue)) in terminals.iter().enumerate() {
+            if let Some(sequence) = queue.front_sequence()? {
+                let is_earlier = match next {
+                    Some((best, _)) => sequence < best,
+                    None => true,
+                };
+                if is_earlier {
+                    next = Some((sequence, index));
+                }
+            }
+        }
+        let Some((_, index)) = next else {
+            return Ok(None);
+        };
+        // Only the consumer removes terminal events, so the head found above
+        // is still there unless the queue was detached; re-scan if it is gone.
+        let Some(event) = terminals[index].1.try_recv()? else {
+            continue;
+        };
+        if event.generation == generation && event.revision == revision {
+            return Ok(Some(event));
+        }
+    }
 }
 
 fn initial_input_sensitivity(node: &GraphNode) -> Option<SensitivitySet> {
@@ -4532,5 +4577,74 @@ mod emit_fanout_tests {
         assert!(queues[1].try_recv().unwrap().is_none());
         assert!(queues[2].try_recv().unwrap().is_none());
         assert_eq!(io.next_sequence.load(Ordering::Relaxed), 42);
+    }
+}
+
+#[cfg(test)]
+mod terminal_order_tests {
+    use super::*;
+
+    fn terminal_event(port: &str, generation: u64, sequence: u64) -> EventEnvelope {
+        EventEnvelope {
+            port: PortRef::new("graph", port),
+            input: None,
+            generation,
+            revision: 1,
+            sequence,
+            sensitivity: SensitivitySet::empty(),
+            remote: None,
+            payload: PortValue::Value(Value::String(port.to_owned())),
+        }
+    }
+
+    #[test]
+    fn streaming_returns_earliest_sequence_across_ready_terminals() {
+        let scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let terminal_a = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let terminal_b = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let terminals = vec![
+            (PortRef::new("graph", "a"), Arc::clone(&terminal_a)),
+            (PortRef::new("graph", "b"), Arc::clone(&terminal_b)),
+        ];
+        // B is emitted first (sequence 1), then A (sequence 2). Both are queued
+        // before the consumer scans, so plan order alone would return A first.
+        terminal_b
+            .send(terminal_event("b", 1, 1), None, &token)
+            .unwrap();
+        terminal_a
+            .send(terminal_event("a", 1, 2), None, &token)
+            .unwrap();
+
+        let first = next_terminal_event(&terminals, 1, 1).unwrap().unwrap();
+        assert_eq!(first.port.port, "b");
+        assert_eq!(first.sequence, 1);
+        let second = next_terminal_event(&terminals, 1, 1).unwrap().unwrap();
+        assert_eq!(second.port.port, "a");
+        assert_eq!(second.sequence, 2);
+        assert!(next_terminal_event(&terminals, 1, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn streaming_skips_stale_events_before_ready_terminal_events() {
+        let scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let terminal_a = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let terminal_b = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let terminals = vec![
+            (PortRef::new("graph", "a"), Arc::clone(&terminal_a)),
+            (PortRef::new("graph", "b"), Arc::clone(&terminal_b)),
+        ];
+        terminal_a
+            .send(terminal_event("a", 0, 1), None, &token)
+            .unwrap();
+        terminal_b
+            .send(terminal_event("b", 1, 2), None, &token)
+            .unwrap();
+
+        let event = next_terminal_event(&terminals, 1, 1).unwrap().unwrap();
+        assert_eq!(event.port.port, "b");
+        assert_eq!(event.sequence, 2);
+        assert!(next_terminal_event(&terminals, 1, 1).unwrap().is_none());
     }
 }

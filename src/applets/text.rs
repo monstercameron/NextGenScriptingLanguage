@@ -720,6 +720,65 @@ fn write_output(output: &mut dyn Write, bytes: &[u8]) -> Result<(), AppletError>
         .map_err(|error| io_error(error, "writing applet output"))
 }
 
+/// Streaming form of [`lines`] for stdin. Each line is passed to `on_line`
+/// as soon as its LF arrives (or at end of input for an unterminated final
+/// line), so the input is never held whole. Only the bytes of the current line
+/// are carried between reads. The line rules are those of [`lines`]: one LF
+/// ends a line, one CR before it is removed, and empty input gives no lines.
+/// Each line is checked as UTF-8 together with its LF, which gives the same
+/// error and absolute offset as the buffered path. Lines before the bad byte
+/// have already been passed to `on_line`. The list limit and the byte limit are
+/// not applied here: they belong to a caller that builds a list or a buffer.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn lines_stream(
+    input: &mut dyn Read,
+    context: &ExecutionContext<'_>,
+    chunk_size: usize,
+    on_line: &mut dyn FnMut(&str) -> Result<(), AppletError>,
+) -> Result<(), AppletError> {
+    let mut buf = vec![0u8; chunk_size.max(1)];
+    // Bytes of the current line, including its LF once one has been read.
+    let mut line: Vec<u8> = Vec::new();
+    // Input offset of line[0], used for error positions.
+    let mut line_start = 0usize;
+    loop {
+        context.checkpoint()?;
+        let read = match input.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_error(error, "reading applet input")),
+        };
+        let mut chunk = &buf[..read];
+        while let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+            line.extend_from_slice(&chunk[..=position]);
+            emit_line(&line, line_start, on_line)?;
+            line_start += line.len();
+            line.clear();
+            chunk = &chunk[position + 1..];
+        }
+        line.extend_from_slice(chunk);
+    }
+    if !line.is_empty() {
+        emit_line(&line, line_start, on_line)?;
+    }
+    Ok(())
+}
+
+/// Check one line (with its LF, if it has one) as UTF-8 and pass it to
+/// `on_line` without the LF and one preceding CR.
+#[cfg_attr(not(test), allow(dead_code))]
+fn emit_line(
+    line: &[u8],
+    start: usize,
+    on_line: &mut dyn FnMut(&str) -> Result<(), AppletError>,
+) -> Result<(), AppletError> {
+    let text = std::str::from_utf8(line)
+        .map_err(|error| utf8_error(start + error.valid_up_to(), error.error_len()))?;
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    on_line(text.strip_suffix('\r').unwrap_or(text))
+}
+
 fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletError> {
     *work += 1;
     if *work == 256 {
@@ -1111,5 +1170,164 @@ mod tests {
             format!("{}{}", "A".to_lowercase(), "Σ".to_lowercase()),
             "aσ"
         );
+    }
+
+    fn buffered_lines(input: &[u8]) -> Result<Vec<String>, (&'static str, String)> {
+        match lines(&Map::new(), input, &ExecutionContext::unrestricted()) {
+            Ok(Value::Array(items)) => Ok(items
+                .into_iter()
+                .map(|item| match item {
+                    Value::String(line) => line,
+                    other => panic!("lines returned {other:?}"),
+                })
+                .collect()),
+            Ok(other) => panic!("lines returned {other:?}"),
+            Err(error) => Err((error.code, error.message)),
+        }
+    }
+
+    fn streamed_lines(
+        input: &[u8],
+        chunk_size: usize,
+        one_byte: bool,
+    ) -> (Result<(), (&'static str, String)>, Vec<String>) {
+        let mut seen = Vec::new();
+        let context = ExecutionContext::unrestricted();
+        let result = {
+            let mut on_line = |line: &str| -> Result<(), AppletError> {
+                seen.push(line.to_owned());
+                Ok(())
+            };
+            if one_byte {
+                lines_stream(&mut OneByte(input), &context, chunk_size, &mut on_line)
+            } else {
+                lines_stream(&mut Cursor::new(input), &context, chunk_size, &mut on_line)
+            }
+        };
+        (result.map_err(|error| (error.code, error.message)), seen)
+    }
+
+    fn assert_lines_match_buffered(input: &[u8]) {
+        let expected = buffered_lines(input);
+        for chunk_size in 1..=9 {
+            for one_byte in [false, true] {
+                let (result, seen) = streamed_lines(input, chunk_size, one_byte);
+                match (&expected, &result) {
+                    (Ok(items), Ok(())) => {
+                        assert_eq!(&seen, items, "input {input:?}, chunk {chunk_size}")
+                    }
+                    (Err(expected_error), Err(actual_error)) => {
+                        assert_eq!(
+                            actual_error, expected_error,
+                            "input {input:?}, chunk {chunk_size}"
+                        );
+                        // Lines passed before the error must be the first lines of the valid prefix.
+                        let valid = match std::str::from_utf8(input) {
+                            Ok(_) => input.len(),
+                            Err(error) => error.valid_up_to(),
+                        };
+                        let prefix = buffered_lines(&input[..valid]).expect("valid prefix");
+                        assert!(
+                            prefix.starts_with(&seen),
+                            "input {input:?}, chunk {chunk_size}: {seen:?} vs {prefix:?}"
+                        );
+                    }
+                    _ => panic!(
+                        "streaming and buffered disagree for {input:?}, chunk {chunk_size}: \
+                         buffered {expected:?}, streamed {result:?}"
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_lines_matches_buffered_for_fixed_edge_cases() {
+        let cases: [&[u8]; 16] = [
+            b"",
+            b"\n",
+            b"\n\n",
+            b"\r",
+            b"\r\n",
+            b"a",
+            b"a\n",
+            b"a\r",
+            b"a\r\n",
+            b"a\r\r\n",
+            b"a\n\nb",
+            b"a\rb\n",
+            b"\r\n\r\n",
+            "ß\nÉ\r\n€".as_bytes(),
+            b"ok\n\xFF\n",
+            b"ab\xE2\n",
+        ];
+        for input in cases {
+            assert_lines_match_buffered(input);
+        }
+    }
+
+    #[test]
+    fn streaming_lines_matches_buffered_for_every_length_and_chunk_size() {
+        for length in 0..=40 {
+            let valid = mixed_utf8(length);
+            let middle = length / 2;
+            let mut with_lf = valid.clone();
+            with_lf.insert(middle, b'\n');
+            let mut with_crlf = valid.clone();
+            with_crlf.insert(middle, b'\n');
+            with_crlf.insert(middle, b'\r');
+            let mut trailing_cr = valid.clone();
+            trailing_cr.push(b'\r');
+            let mut terminated = valid.clone();
+            terminated.extend_from_slice(b"\r\n\n");
+            let mut stray_continuation = valid.clone();
+            stray_continuation.insert(middle, 0x80);
+            let mut invalid_byte = valid.clone();
+            invalid_byte.insert(middle, 0xFF);
+            let mut truncated_four = valid.clone();
+            truncated_four.extend_from_slice(&[0xF0, 0x9F, 0x98]);
+            let mut truncated_three = valid.clone();
+            truncated_three.push(0xE2);
+            let mut bad_continuation = valid.clone();
+            bad_continuation.extend_from_slice(&[0xC3, 0x28]);
+            let mut split_before_lf = valid.clone();
+            split_before_lf.extend_from_slice(&[0xE2, b'\n', b'x']);
+            for input in [
+                valid,
+                with_lf,
+                with_crlf,
+                trailing_cr,
+                terminated,
+                stray_continuation,
+                invalid_byte,
+                truncated_four,
+                truncated_three,
+                bad_continuation,
+                split_before_lf,
+            ] {
+                assert_lines_match_buffered(&input);
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_lines_observes_cancellation_before_reading() {
+        let checkpoint = || -> Result<(), crate::applets::ExecutionBudgetExceeded> {
+            Err(crate::applets::ExecutionBudgetExceeded::Cancelled)
+        };
+        let context = ExecutionContext::new(&checkpoint);
+        let mut seen = Vec::new();
+        let error = lines_stream(
+            &mut Cursor::new(b"a\nb".as_slice()),
+            &context,
+            2,
+            &mut |line: &str| -> Result<(), AppletError> {
+                seen.push(line.to_owned());
+                Ok(())
+            },
+        )
+        .expect_err("cancelled before the first read");
+        assert_eq!(error.kind, crate::applets::AppletErrorKind::Cancelled);
+        assert!(seen.is_empty());
     }
 }

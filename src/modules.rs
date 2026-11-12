@@ -2139,7 +2139,9 @@ fn port_schema_accepts_input_with_usize_max(
     }
     match input {
         InputType::Never => true,
-        InputType::Text => matches!(schema.kind, OutputType::Text | OutputType::Path),
+        InputType::Text | InputType::Path | InputType::File | InputType::Directory => {
+            matches!(schema.kind, OutputType::Text | OutputType::Path)
+        }
         InputType::Integer => schema.kind == OutputType::Integer,
         InputType::UnsignedInteger => {
             schema.kind == OutputType::UnsignedInteger || schema.kind == OutputType::Usize

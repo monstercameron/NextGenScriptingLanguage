@@ -707,6 +707,12 @@ pub struct ReusableProgram {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputType {
     Text,
+    /// Any non-empty path, given as text.
+    Path,
+    /// A path that must name an existing regular file when inputs are resolved.
+    File,
+    /// A path that must name an existing directory when inputs are resolved.
+    Directory,
     Integer,
     /// A nonnegative integer in the full u64 domain, produced by applets.
     /// Script-declared integers remain signed `Integer` values.
@@ -726,6 +732,18 @@ pub enum InputType {
     Never,
     /// A raw byte capture (`then capture bytes as NAME`). Never valid as text.
     Bytes,
+}
+
+impl InputType {
+    /// The type of the value an input carries while the program runs. Path inputs
+    /// are strings, so every check that compares value types uses this form; only
+    /// declarations, help, inspect and completion see `Path`, `File` or `Directory`.
+    pub fn value_kind(self) -> Self {
+        match self {
+            Self::Path | Self::File | Self::Directory => Self::Text,
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

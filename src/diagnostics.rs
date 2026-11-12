@@ -2304,6 +2304,9 @@ fn format_input_is_scalar(kind: crate::ast::InputType) -> bool {
     matches!(
         kind,
         crate::ast::InputType::Text
+            | crate::ast::InputType::Path
+            | crate::ast::InputType::File
+            | crate::ast::InputType::Directory
             | crate::ast::InputType::Integer
             | crate::ast::InputType::UnsignedInteger
             | crate::ast::InputType::Usize
@@ -3989,7 +3992,10 @@ fn collect_program_diagnostics(
     for input in &program.inputs {
         let kind = match input.kind {
             crate::ast::InputType::Never => None,
-            crate::ast::InputType::Text => Some(OutputType::Text),
+            crate::ast::InputType::Text
+            | crate::ast::InputType::Path
+            | crate::ast::InputType::File
+            | crate::ast::InputType::Directory => Some(OutputType::Text),
             crate::ast::InputType::Integer => Some(OutputType::Integer),
             crate::ast::InputType::UnsignedInteger => Some(OutputType::UnsignedInteger),
             crate::ast::InputType::Usize => Some(OutputType::Usize),
@@ -4611,7 +4617,10 @@ fn missing_program_input_edit(
     let offset = line_start + bom + statement.indent + layout.parameter_insert;
     let placeholder = match kind {
         crate::ast::InputType::Never => return None,
-        crate::ast::InputType::Text => match choices {
+        crate::ast::InputType::Text
+        | crate::ast::InputType::Path
+        | crate::ast::InputType::File
+        | crate::ast::InputType::Directory => match choices {
             Some([first, ..]) => serde_json::to_string(first).ok()?,
             Some([]) => return None,
             None => "\"\"".to_owned(),
@@ -5480,7 +5489,10 @@ fn set_scoped_binding_type(scope: &mut InferredTypeScope, binding: &str, kind: O
 fn output_type_for_input(kind: crate::ast::InputType) -> OutputType {
     match kind {
         crate::ast::InputType::Never => OutputType::Json,
-        crate::ast::InputType::Text => OutputType::Text,
+        crate::ast::InputType::Text
+        | crate::ast::InputType::Path
+        | crate::ast::InputType::File
+        | crate::ast::InputType::Directory => OutputType::Text,
         crate::ast::InputType::Integer => OutputType::Integer,
         crate::ast::InputType::UnsignedInteger => OutputType::UnsignedInteger,
         crate::ast::InputType::Usize => OutputType::Usize,

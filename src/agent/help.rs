@@ -169,6 +169,9 @@ fn plain_json(value: &ProgramValue) -> Value {
 fn type_label(kind: InputType) -> &'static str {
     match kind {
         InputType::Text => "text",
+        InputType::Path => "path",
+        InputType::File => "file",
+        InputType::Directory => "directory",
         InputType::Integer => "integer",
         InputType::UnsignedInteger => "unsigned integer",
         InputType::Usize => "usize",

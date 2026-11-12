@@ -7,6 +7,9 @@ impl std::fmt::Display for InputType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Text => "text",
+            Self::Path => "path",
+            Self::File => "file",
+            Self::Directory => "directory",
             Self::Integer => "integer",
             Self::UnsignedInteger => "unsigned integer",
             Self::Usize => "usize",
@@ -39,6 +42,9 @@ impl InputDeclaration {
     pub fn validate_value(&self, value: &Value) -> Result<()> {
         let valid = match (self.kind, value) {
             (InputType::Text, Value::String(s)) => !s.contains('\0'),
+            (InputType::Path | InputType::File | InputType::Directory, Value::String(s)) => {
+                !s.is_empty() && !s.contains('\0')
+            }
             (InputType::Integer, Value::Integer(_)) | (InputType::Boolean, Value::Bool(_)) => true,
             (InputType::UnsignedInteger, Value::Integer(value)) => *value >= 0,
             (InputType::UnsignedInteger, Value::Number(value)) => value.as_u64().is_some(),
@@ -71,6 +77,21 @@ impl InputDeclaration {
         if !valid {
             match (self.kind, value) {
                 (InputType::Text, Value::String(_)) => {
+                    bail!(
+                        "line {}: input {:?} contains a NUL byte",
+                        self.line,
+                        self.name
+                    )
+                }
+                (InputType::Path | InputType::File | InputType::Directory, Value::String(text)) => {
+                    if text.is_empty() {
+                        bail!(
+                            "line {}: input {:?} must be a nonempty {}",
+                            self.line,
+                            self.name,
+                            self.kind
+                        )
+                    }
                     bail!(
                         "line {}: input {:?} contains a NUL byte",
                         self.line,
@@ -140,9 +161,54 @@ impl InputDeclaration {
         Ok(())
     }
 
+    /// Checks a `file` or `directory` input against the filesystem, following symlinks.
+    /// Only `resolve` calls this, once the value is known and before any step runs.
+    /// Static checks never reach it, so a missing default is not a check error.
+    pub(crate) fn check_path_on_disk(&self, value: &Value) -> Result<()> {
+        let wanted = match self.kind {
+            InputType::File => "a regular file",
+            InputType::Directory => "a directory",
+            _ => return Ok(()),
+        };
+        let Value::String(text) = value else {
+            return Ok(());
+        };
+        let problem = match std::fs::metadata(text) {
+            Ok(metadata) => {
+                let found = if self.kind == InputType::File {
+                    metadata.is_file()
+                } else {
+                    metadata.is_dir()
+                };
+                if found {
+                    return Ok(());
+                }
+                format!("is not {wanted}")
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                "does not exist".to_owned()
+            }
+            Err(error) => format!("could not be inspected ({})", error.kind()),
+        };
+        if crate::ast::is_sensitive(self) {
+            bail!(
+                "line {}: input {:?} must name {wanted}; the supplied value is not shown ({problem})",
+                self.line,
+                self.name
+            );
+        }
+        bail!(
+            "line {}: input {:?} must name {wanted}; {text:?} {problem}",
+            self.line,
+            self.name
+        );
+    }
+
     pub fn parse_cli(&self, text: &str) -> Result<Value> {
         let value = match self.kind {
-            InputType::Text => Value::String(text.into()),
+            InputType::Text | InputType::Path | InputType::File | InputType::Directory => {
+                Value::String(text.into())
+            }
             InputType::Integer => Value::Integer(
                 text.parse()
                     .with_context(|| format!("input {:?} requires an integer", self.name))?,
@@ -203,7 +269,10 @@ impl InputDeclaration {
     pub(crate) fn parse_json(&self, value: &serde_json::Value) -> Result<Value> {
         let result = match (self.kind, value) {
             (InputType::Json, value) => crate::structured::from_json(value.clone()),
-            (InputType::Text, serde_json::Value::String(s)) => Value::String(s.clone()),
+            (
+                InputType::Text | InputType::Path | InputType::File | InputType::Directory,
+                serde_json::Value::String(s),
+            ) => Value::String(s.clone()),
             (InputType::Integer, serde_json::Value::Number(n)) if n.as_i64().is_some() => {
                 Value::Integer(n.as_i64().unwrap())
             }
@@ -464,6 +533,7 @@ pub fn resolve(
                     ),
                 })?;
             input.validate_value(value)?;
+            input.check_path_on_disk(value)?;
             Ok((input.name.clone(), value.clone()))
         })
         .collect()
@@ -591,6 +661,9 @@ fn validate_flag_spelling<'a>(
             if !matches!(
                 input.kind,
                 InputType::Text
+                    | InputType::Path
+                    | InputType::File
+                    | InputType::Directory
                     | InputType::Integer
                     | InputType::UnsignedInteger
                     | InputType::Usize

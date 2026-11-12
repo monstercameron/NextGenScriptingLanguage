@@ -21,6 +21,9 @@
           "type": {
             "enum": [
               "text",
+              "path",
+              "file",
+              "directory",
               "integer",
               "unsigned integer",
               "usize",

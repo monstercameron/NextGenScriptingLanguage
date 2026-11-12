@@ -19,7 +19,7 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                 types: definition
                     .inputs
                     .iter()
-                    .map(|input| (input.name.clone(), input.kind))
+                    .map(|input| (input.name.clone(), input.kind.value_kind()))
                     .collect(),
                 nul_text_bindings: BTreeSet::new(),
                 known_values: BTreeMap::new(),
@@ -97,8 +97,8 @@ pub(super) fn validate_arguments(
         check_value(value, &flow.names)?;
         if let Value::Reference(name) = value {
             if let Some(kind) = flow.types.get(name) {
-                if input.kind != InputType::Json && input.kind != *kind && *kind != InputType::Never
-                {
+                let declared = input.kind.value_kind();
+                if declared != InputType::Json && declared != *kind && *kind != InputType::Never {
                     bail!(
                         "program input {:?} expects {}, but {name:?} contains {kind}",
                         input.name,

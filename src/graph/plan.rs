@@ -645,7 +645,7 @@ impl GraphPlan {
         let input_types = self
             .inputs
             .iter()
-            .map(|input| (input.name.clone(), input.kind))
+            .map(|input| (input.name.clone(), input.kind.value_kind()))
             .collect::<BTreeMap<_, _>>();
         let sensitivity_labels = self.effective_sensitivity_labels(registry)?;
         for node in &self.nodes {

@@ -2019,11 +2019,15 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
 }
 
 /// The type words that `accept` and `produce` share, read from `start`: `text`,
-/// `integer`, `boolean`, `json`, `list of text`, `list of integer` and `list of json`.
+/// `path`, `file`, `directory`, `integer`, `boolean`, `json`, `list of text`,
+/// `list of integer` and `list of json`. `produce` refuses the path words itself.
 /// Returns the type and the cursor after it, or `None` when no such type starts there.
 fn parse_type_words(tokens: &[Token<'_>], start: usize) -> Option<(InputType, usize)> {
     match tokens.get(start) {
         Some(Token::Word("text")) => Some((InputType::Text, start + 1)),
+        Some(Token::Word("path")) => Some((InputType::Path, start + 1)),
+        Some(Token::Word("file")) => Some((InputType::File, start + 1)),
+        Some(Token::Word("directory")) => Some((InputType::Directory, start + 1)),
         Some(Token::Word("integer")) => Some((InputType::Integer, start + 1)),
         Some(Token::Word("boolean")) => Some((InputType::Boolean, start + 1)),
         Some(Token::Word("json")) => Some((InputType::Json, start + 1)),

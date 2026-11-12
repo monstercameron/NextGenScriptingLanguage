@@ -30,7 +30,7 @@ source      = "environment" TEXT | "arguments" | "argument" INTEGER
             | "flag" TEXT [ "alias" TEXT ]          (boolean inputs only)
             | "option" TEXT [ "alias" TEXT ]        (text or integer inputs only)
             | [ "secret" ] "prompt" TEXT
-TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
+TYPE        = "text" | "path" | "file" | "directory" | "integer" | "boolean" | "list" "of" "text" | "json"
 output      = "produce" OUTTYPE [ "described" "as" TEXT ]
 OUTTYPE     = "text" | "integer" | "boolean" | "list" "of" "text" | "json" | "none"
 ```

@@ -1348,6 +1348,9 @@ fn complete_accept_line(items: &mut Vec<JsonValue>, words: &[&str], ends_with_sp
     if after.is_empty() || (after.len() == 1 && !ends_with_space) {
         for form in [
             "text",
+            "path",
+            "file",
+            "directory",
             "integer",
             "boolean",
             "json",
@@ -3007,6 +3010,9 @@ struct JobDecl {
 fn input_type_label(kind: &crate::ast::InputType) -> &'static str {
     match kind {
         crate::ast::InputType::Text => "text",
+        crate::ast::InputType::Path => "path",
+        crate::ast::InputType::File => "file",
+        crate::ast::InputType::Directory => "directory",
         crate::ast::InputType::Integer
         | crate::ast::InputType::UnsignedInteger
         | crate::ast::InputType::Usize => "integer",

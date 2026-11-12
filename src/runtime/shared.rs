@@ -779,7 +779,12 @@ fn validate_text_operand(value: &Value, flow: &control::FlowState, what: &str) -
     match value {
         Value::String(_) => Ok(()),
         Value::Reference(name) => match flow.types.get(name) {
-            Some(crate::ast::InputType::Text | crate::ast::InputType::Never) => Ok(()),
+            Some(kind)
+                if kind.value_kind() == crate::ast::InputType::Text
+                    || *kind == crate::ast::InputType::Never =>
+            {
+                Ok(())
+            }
             Some(kind) => bail!("{what} {name:?} must be text, received {kind}"),
             None => bail!("{what} {name:?} has no known text type"),
         },
@@ -2172,7 +2177,7 @@ fn validate_range(
                 names: inputs.iter().map(|input| input.name.clone()).collect(),
                 types: inputs
                     .iter()
-                    .map(|input| (input.name.clone(), input.kind))
+                    .map(|input| (input.name.clone(), input.kind.value_kind()))
                     .collect(),
                 nul_text_bindings: BTreeSet::new(),
                 known_values: BTreeMap::new(),
@@ -2387,7 +2392,8 @@ fn validate_range(
             };
             if let Some(Value::Reference(name)) = path {
                 if flow.types.get(name).is_some_and(|kind| {
-                    *kind != crate::ast::InputType::Text && *kind != crate::ast::InputType::Never
+                    kind.value_kind() != crate::ast::InputType::Text
+                        && *kind != crate::ast::InputType::Never
                 }) {
                     bail!("path {name:?} requires text, received {}", flow.types[name]);
                 }
@@ -2582,7 +2588,7 @@ fn validate_range(
                     check_value(pointer, &flow.names)?;
                     if let Value::Reference(reference) = pointer {
                         if flow.types.get(reference).is_some_and(|kind| {
-                            *kind != crate::ast::InputType::Text
+                            kind.value_kind() != crate::ast::InputType::Text
                                 && *kind != crate::ast::InputType::Never
                         }) {
                             bail!("dynamic JSON pointer {reference:?} requires text");
@@ -3667,7 +3673,7 @@ fn binding_value_type(
             if kind == InputType::Bytes {
                 bail!("use value cannot bind bytes; use bytes {name} instead");
             }
-            kind
+            kind.value_kind()
         }
         // NUL cannot cross the native text boundary. Preserve it as JSON so
         // a list binding containing NUL has the same loop element type as an

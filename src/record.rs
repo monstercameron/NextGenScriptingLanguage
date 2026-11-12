@@ -42,7 +42,11 @@
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
-//!   byte counts, SHA-256 hashes and blob names.
+//!   byte counts, SHA-256 hashes and blob names. A `model_decision` event in the
+//!   same file records one model call's decision (request hash, kind, chosen label
+//!   or decision or score, confidence, accepted, minimum, transport, returned model
+//!   and usage). It holds typed fields only, never input text, prompt or provider
+//!   free text, and it is not a step: step counts skip it.
 //! - `blobs/<sha256>`: the stdout and stderr bytes, content-addressed. Blobs are
 //!   written after redaction, so the hash matches the stored bytes.
 //!
@@ -1773,6 +1777,9 @@ pub struct StoredRecord {
     /// marker was published, so its completed prefix is unproven. `show-run`
     /// still opens it; repair and resume refuse it.
     pub trace_count_mismatch: bool,
+    /// The `model_decision` events in the trace, in order, as written. They are
+    /// not steps: they never count toward `steps` or the step-count checks.
+    pub model_decisions: Vec<Json>,
 }
 
 /// Refuse a repair or resume from a record that cannot prove its completed
@@ -1994,6 +2001,7 @@ impl StoredRecord {
         let trace_line_count = trace.lines().count();
         let has_torn_final_line = run["finished"] == false && !trace.ends_with('\n');
         let mut steps = Vec::new();
+        let mut model_decisions = Vec::new();
         let mut torn_trace = false;
         for (number, line) in trace.lines().enumerate() {
             if line.len() > MAX_TRACE_BYTES {
@@ -2015,6 +2023,10 @@ impl StoredRecord {
                     return Err(error).with_context(|| format!("trace.jsonl line {}", number + 1));
                 }
             };
+            if value["event"] == MODEL_DECISION_EVENT {
+                model_decisions.push(value);
+                continue;
+            }
             if value["event"] != "step" {
                 continue;
             }
@@ -2051,6 +2063,7 @@ impl StoredRecord {
             steps,
             torn_trace,
             trace_count_mismatch,
+            model_decisions,
         })
     }
 
@@ -2559,6 +2572,7 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             "truncated": record.run["truncated"],
             "failed_step": failed,
             "slowest_steps": slowest,
+            "model_decisions": record.model_decisions,
             "policy": record.run.get("policy").cloned().unwrap_or(Json::Null),
             "invocation": record.run.get("invocation").cloned().unwrap_or(Json::Null),
             "decisions": decisions,
@@ -2614,6 +2628,7 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             step["index"], step["line"], step["applets"], step["wall_us"]
         ));
     }
+    text.push_str(&model_decisions_text(&record.model_decisions));
     text.push_str(&policy_summary_text(&record.run));
     // The record warning comes first: it qualifies the whole record,
     // including the audit below it.
@@ -3008,6 +3023,210 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;
     Ok(())
+}
+
+/// The trace event kind a model decision is written under. Readers that count
+/// steps skip it, and `show-run` lists it.
+pub const MODEL_DECISION_EVENT: &str = "model_decision";
+/// Domain string for the model request hash. Changing it retires old hashes.
+const MODEL_REQUEST_DOMAIN: &str = "execute.model-request/1";
+/// Longest returned model id a decision event keeps.
+const MAX_MODEL_ID_BYTES: usize = 128;
+
+/// The request parameters of one model call that a decision event is about.
+/// The input text, the prompt and the provider's free text are deliberately
+/// absent: the hash and the event are built from this struct alone, so none of
+/// them can reach the record through it.
+pub struct ModelDecisionRequest<'a> {
+    /// `classify`, `judge` or `score`.
+    pub kind: &'a str,
+    /// The model id the caller asked for.
+    pub model: &'a str,
+    /// The classify label set. Empty for judge and score.
+    pub labels: &'a [String],
+    /// The score rubric levels, in order. Empty for classify and judge.
+    pub levels: &'a [String],
+    /// The percent threshold `accepted` is computed against.
+    pub minimum: u8,
+}
+
+/// SHA-256 of the canonical semantic request: kind, model, the label set
+/// (sorted, so order is not significant), the rubric levels (in order) and the
+/// minimum. Calls that differ only in input text or prompt hash the same.
+pub fn model_request_sha256(request: &ModelDecisionRequest) -> String {
+    let mut labels = request
+        .labels
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    let canonical = json!({
+        "domain": MODEL_REQUEST_DOMAIN,
+        "kind": request.kind,
+        "model": request.model,
+        "labels": labels,
+        "levels": request.levels,
+        "minimum": request.minimum,
+    });
+    sha256_hex(&canonical_json(&canonical))
+}
+
+/// Build the `model_decision` event for one `execute.model/1` result, or `None`
+/// when the result is not a jev classify, judge or score answer of this request.
+///
+/// Every event field is a typed read of one result field, never a copy of the
+/// result object, so the provider's free text, the input text and the prompt
+/// cannot reach the event. A classify event carries the chosen label and the
+/// size of the label set, never the set itself. A result that lacks a field,
+/// names an unknown kind or transport, or whose `accepted` disagrees with its
+/// confidence and the request minimum yields no event rather than a partial one.
+pub fn model_decision_event(result: &Json, request: &ModelDecisionRequest) -> Option<Json> {
+    if result.get("protocol")?.as_str()? != "execute.model/1"
+        || result.get("provider")?.as_str()? != "jev"
+    {
+        return None;
+    }
+    let kind = result.get("kind")?.as_str()?;
+    if kind != request.kind {
+        return None;
+    }
+    let transport = result.get("transport")?.as_str()?;
+    if !matches!(transport, "fixture" | "https" | "http_loopback") {
+        return None;
+    }
+    let model = result.get("model")?.as_str()?;
+    if !bounded_model_id(model) {
+        return None;
+    }
+    let usage = result.get("usage")?;
+    let usage = json!({
+        "input_tokens": usage.get("input_tokens")?.as_u64()?,
+        "output_tokens": usage.get("output_tokens")?.as_u64()?,
+        "total_tokens": usage.get("total_tokens")?.as_u64()?,
+    });
+    let confidence_percent = u8::try_from(result.get("confidence_percent")?.as_u64()?).ok()?;
+    let accepted = result.get("accepted")?.as_bool()?;
+    if confidence_percent > 100 || accepted != (confidence_percent >= request.minimum) {
+        return None;
+    }
+    let mut event = json!({
+        "event": MODEL_DECISION_EVENT,
+        "kind": kind,
+        "request_sha256": model_request_sha256(request),
+        "confidence_percent": confidence_percent,
+        "accepted": accepted,
+        "minimum": request.minimum,
+        "transport": transport,
+        "model": model,
+        "usage": usage,
+    });
+    match kind {
+        "classify" => {
+            let label = result.get("label")?.as_str()?;
+            if !request.labels.iter().any(|candidate| candidate == label) {
+                return None;
+            }
+            event["label"] = json!(label);
+            event["label_count"] = json!(request.labels.len());
+        }
+        "judge" => event["decision"] = json!(result.get("decision")?.as_bool()?),
+        "score" => {
+            let score = result.get("score")?.as_f64()?;
+            let top = request.levels.len().checked_sub(1)? as f64;
+            if !score.is_finite() || !(0.0..=top).contains(&score) {
+                return None;
+            }
+            event["score"] = json!(score);
+        }
+        _ => return None,
+    }
+    Some(event)
+}
+
+/// A returned model id is short and made of identifier characters, so it can
+/// never carry free text through this field.
+fn bounded_model_id(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= MAX_MODEL_ID_BYTES
+        && model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._:/@+".contains(&byte))
+}
+
+impl Recorder {
+    /// Append one `model_decision` event to the trace, in order with the steps.
+    /// It is not a step: it never moves the step count, and the record seal
+    /// covers its bytes with the rest of the trace. The label and the model id
+    /// go through the same redactor as argv before they are written. Bounds
+    /// match step lines: past the trace limit the event is dropped and the
+    /// record is marked truncated.
+    pub fn record_model_decision(&self, event: &Json) -> Result<()> {
+        if event.get("event").and_then(Json::as_str) != Some(MODEL_DECISION_EVENT) {
+            bail!("only a model_decision event can be recorded as one");
+        }
+        let mut redacted = event.clone();
+        for field in ["label", "model"] {
+            if let Some(text) = event.get(field).and_then(Json::as_str) {
+                redacted[field] = Json::String(self.redactor.redact_text(text));
+            }
+        }
+        let mut line = serde_json::to_vec(&redacted)?;
+        line.push(b'\n');
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.trace_truncated || state.trace_bytes.saturating_add(line.len()) > MAX_TRACE_BYTES {
+            state.trace_truncated = true;
+            state.truncated = true;
+            return Ok(());
+        }
+        state.trace.write_all(&line)?;
+        state.trace_bytes += line.len();
+        state.trace.flush()?;
+        Ok(())
+    }
+}
+
+/// The model decisions section of `show-run`, one line per decision. Empty for
+/// a record that holds none, so records without model calls print as before.
+fn model_decisions_text(decisions: &[Json]) -> String {
+    if decisions.is_empty() {
+        return String::new();
+    }
+    fn field(value: Option<&Json>) -> String {
+        match value {
+            Some(Json::String(text)) => crate::terminal_text::escape_terminal_field(text),
+            Some(other) => other.to_string(),
+            None => "unknown".to_owned(),
+        }
+    }
+    let mut text = format!("model decisions: {}\n", decisions.len());
+    for (ordinal, decision) in decisions.iter().enumerate() {
+        let chosen = if decision.get("label").is_some() {
+            format!(
+                "label {} of {} labels",
+                field(decision.get("label")),
+                field(decision.get("label_count"))
+            )
+        } else if decision.get("decision").is_some() {
+            format!("decision {}", field(decision.get("decision")))
+        } else {
+            format!("score {}", field(decision.get("score")))
+        };
+        text.push_str(&format!(
+            "  decision {} of {}: {}; kind {}, confidence {}% against minimum {}, accepted {}; transport {}, model {}, total tokens {}; request {}\n",
+            ordinal + 1,
+            decisions.len(),
+            chosen,
+            field(decision.get("kind")),
+            field(decision.get("confidence_percent")),
+            field(decision.get("minimum")),
+            field(decision.get("accepted")),
+            field(decision.get("transport")),
+            field(decision.get("model")),
+            field(decision.get("usage").and_then(|usage| usage.get("total_tokens"))),
+            field(decision.get("request_sha256")),
+        ));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -3713,6 +3932,344 @@ mod policy_audit_tests {
     fn run_document(directory: &tempfile::TempDir) -> Value {
         let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    use crate::record::{
+        model_decision_event, model_request_sha256, ModelDecisionRequest, RecordVerification,
+    };
+
+    fn model_labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn model_request<'a>(labels: &'a [String], minimum: u8) -> ModelDecisionRequest<'a> {
+        ModelDecisionRequest {
+            kind: "classify",
+            model: "jev-classifier-1",
+            labels,
+            levels: &[],
+            minimum,
+        }
+    }
+
+    /// A classify answer shaped like `execute.model/1` output from models.rs.
+    fn classify_result() -> Value {
+        json!({
+            "protocol": "execute.model/1",
+            "provider": "jev",
+            "model": "jev-classifier-1",
+            "kind": "classify",
+            "transport": "fixture",
+            "usage": {"input_tokens": 120, "output_tokens": 4, "total_tokens": 124},
+            "label": "refund",
+            "confidence_percent": 91,
+            "accepted": true,
+        })
+    }
+
+    fn with_field(mut value: Value, key: &str, replacement: Value) -> Value {
+        value[key] = replacement;
+        value
+    }
+
+    fn without_field(mut value: Value, key: &str) -> Value {
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove(key);
+        }
+        value
+    }
+
+    fn sorted_keys(value: &Value) -> Vec<String> {
+        let mut keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    fn start_model_recorder(
+        directory: &tempfile::TempDir,
+        registry: &crate::manifest::Registry,
+    ) -> Recorder {
+        Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
+            working_directory: directory.path(),
+        })
+        .unwrap()
+    }
+
+    fn finish_model_recorder(recorder: &Recorder) {
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn model_decision_for_a_classify_result_has_exactly_the_specified_keys() {
+        let labels = model_labels(&["refund", "billing", "other"]);
+        let event = model_decision_event(&classify_result(), &model_request(&labels, 80)).unwrap();
+        assert_eq!(
+            sorted_keys(&event),
+            [
+                "accepted",
+                "confidence_percent",
+                "event",
+                "kind",
+                "label",
+                "label_count",
+                "minimum",
+                "model",
+                "request_sha256",
+                "transport",
+                "usage",
+            ]
+        );
+        assert_eq!(event["event"], "model_decision");
+        assert_eq!(event["kind"], "classify");
+        assert_eq!(event["label"], "refund");
+        assert_eq!(event["label_count"], 3);
+        assert_eq!(event["confidence_percent"], 91);
+        assert_eq!(event["accepted"], true);
+        assert_eq!(event["minimum"], 80);
+        assert_eq!(event["transport"], "fixture");
+        assert_eq!(event["model"], "jev-classifier-1");
+        assert_eq!(
+            event["usage"],
+            json!({"input_tokens": 120, "output_tokens": 4, "total_tokens": 124})
+        );
+        assert_eq!(event["request_sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn model_decision_judge_and_score_carry_their_own_value_key() {
+        let judge = json!({
+            "protocol": "execute.model/1", "provider": "jev", "model": "m", "kind": "judge",
+            "transport": "https", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "decision": true, "confidence_percent": 85, "accepted": true,
+        });
+        let judge_request = ModelDecisionRequest {
+            kind: "judge",
+            model: "m",
+            labels: &[],
+            levels: &[],
+            minimum: 80,
+        };
+        let event = model_decision_event(&judge, &judge_request).unwrap();
+        assert_eq!(event["decision"], true);
+        assert!(event.get("label").is_none() && event.get("label_count").is_none());
+
+        let levels = model_labels(&["low", "mid", "high"]);
+        let score = json!({
+            "protocol": "execute.model/1", "provider": "jev", "model": "m", "kind": "score",
+            "transport": "http_loopback", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "score": 1.5, "confidence_percent": 70, "accepted": false,
+        });
+        let score_request = ModelDecisionRequest {
+            kind: "score",
+            model: "m",
+            labels: &[],
+            levels: &levels,
+            minimum: 80,
+        };
+        let event = model_decision_event(&score, &score_request).unwrap();
+        assert_eq!(event["score"], 1.5);
+        assert_eq!(event["transport"], "http_loopback");
+        let out_of_rubric = with_field(score, "score", json!(3));
+        assert!(model_decision_event(&out_of_rubric, &score_request).is_none());
+    }
+
+    #[test]
+    fn model_decision_bytes_never_carry_input_text_prompt_or_provider_free_text() {
+        const INPUT: &str = "SENTINEL-INPUT-TEXT-7f3a";
+        const PROMPT: &str = "SENTINEL-PROMPT-QUESTION-9b1c";
+        const FREE_TEXT: &str = "SENTINEL-PROVIDER-FREE-TEXT-2d8e";
+        // A reply carrying everything a whole-object copy would pick up.
+        let mut result = classify_result();
+        result["state"] = json!({"text": INPUT});
+        result["question"] = json!(PROMPT);
+        result["reasoning"] = json!(FREE_TEXT);
+        let labels = model_labels(&["refund", "billing"]);
+        let event = model_decision_event(&result, &model_request(&labels, 80)).unwrap();
+        let bytes = serde_json::to_vec(&event).unwrap();
+        for marker in [INPUT, PROMPT, FREE_TEXT] {
+            assert!(
+                !bytes
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_bytes()),
+                "event bytes carry {marker}"
+            );
+        }
+
+        // The same event, written through a real recorder, leaves the markers
+        // out of the trace file too.
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = start_model_recorder(&directory, &registry);
+        recorder.record_model_decision(&event).unwrap();
+        finish_model_recorder(&recorder);
+        let trace = std::fs::read(directory.path().join(super::TRACE_FILE)).unwrap();
+        for marker in [INPUT, PROMPT, FREE_TEXT] {
+            assert!(
+                !trace
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_bytes()),
+                "trace carries {marker}"
+            );
+        }
+        assert!(String::from_utf8_lossy(&trace).contains("\"event\":\"model_decision\""));
+    }
+
+    #[test]
+    fn model_request_hash_ignores_input_and_follows_label_set_and_minimum() {
+        let labels = model_labels(&["refund", "billing", "other"]);
+        let base = model_request_sha256(&model_request(&labels, 80));
+        // `ModelDecisionRequest` has no input or prompt field, so two calls that
+        // differ only in those are the same request by construction.
+        assert_eq!(base, model_request_sha256(&model_request(&labels, 80)));
+        let reordered = model_labels(&["other", "refund", "billing"]);
+        assert_eq!(
+            base,
+            model_request_sha256(&model_request(&reordered, 80)),
+            "label order is not part of the set"
+        );
+        let smaller = model_labels(&["refund", "billing"]);
+        assert_ne!(base, model_request_sha256(&model_request(&smaller, 80)));
+        assert_ne!(base, model_request_sha256(&model_request(&labels, 81)));
+        let other_model = ModelDecisionRequest {
+            model: "jev-classifier-2",
+            ..model_request(&labels, 80)
+        };
+        assert_ne!(base, model_request_sha256(&other_model));
+    }
+
+    #[test]
+    fn unknown_or_inconsistent_results_yield_no_event_at_all() {
+        let labels = model_labels(&["refund", "billing"]);
+        let request = model_request(&labels, 80);
+        assert!(model_decision_event(&classify_result(), &request).is_some());
+        let usage_missing_total = with_field(
+            classify_result(),
+            "usage",
+            json!({"input_tokens": 1, "output_tokens": 2}),
+        );
+        let ask_shaped = json!({
+            "protocol": "execute.model/1", "provider": "jev", "model": "m", "kind": "classify",
+            "transport": "fixture", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "answers": {"q": {"type": "choice", "choice": "refund"}},
+        });
+        let cases = [
+            ("no accepted", without_field(classify_result(), "accepted")),
+            ("no usage", without_field(classify_result(), "usage")),
+            ("usage without total", usage_missing_total),
+            (
+                "no transport",
+                without_field(classify_result(), "transport"),
+            ),
+            (
+                "unknown transport",
+                with_field(classify_result(), "transport", json!("carrier_pigeon")),
+            ),
+            (
+                "other kind",
+                with_field(classify_result(), "kind", json!("judge")),
+            ),
+            (
+                "other provider",
+                with_field(classify_result(), "provider", json!("openai")),
+            ),
+            (
+                "other protocol",
+                with_field(classify_result(), "protocol", json!("execute.model/2")),
+            ),
+            (
+                "label outside the set",
+                with_field(classify_result(), "label", json!("unlisted")),
+            ),
+            (
+                "accepted against minimum",
+                with_field(classify_result(), "confidence_percent", json!(79)),
+            ),
+            (
+                "confidence over 100",
+                with_field(classify_result(), "confidence_percent", json!(101)),
+            ),
+            (
+                "bad model id",
+                with_field(classify_result(), "model", json!("two words")),
+            ),
+            (
+                "empty model id",
+                with_field(classify_result(), "model", json!("")),
+            ),
+            ("ask shape without a label", ask_shaped),
+        ];
+        for (name, result) in cases {
+            assert!(
+                model_decision_event(&result, &request).is_none(),
+                "{name} produced an event"
+            );
+        }
+        let not_a_classify_result = without_field(classify_result(), "label");
+        assert!(model_decision_event(&not_a_classify_result, &request).is_none());
+    }
+
+    #[test]
+    fn model_decision_is_not_a_step_is_sealed_and_show_run_lists_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let labels = model_labels(&["refund", "billing"]);
+        let event = model_decision_event(&classify_result(), &model_request(&labels, 80)).unwrap();
+        let recorder = start_model_recorder(&directory, &registry);
+        recorder.record_model_decision(&event).unwrap();
+        finish_model_recorder(&recorder);
+
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert!(record.steps.is_empty());
+        assert_eq!(record.run["steps"], 0);
+        assert!(!record.trace_count_mismatch);
+        assert_eq!(record.model_decisions.len(), 1);
+        assert_eq!(record.model_decisions[0]["label"], "refund");
+        assert_eq!(
+            record.record_integrity(&test_seal()),
+            RecordVerification::Verified
+        );
+
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(text.contains("model decisions: 1"), "{text}");
+        assert!(text.contains("label refund of 2 labels"), "{text}");
+        let document: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(document["model_decisions"][0]["label"], "refund");
+        assert_eq!(document["steps"], 0);
+
+        // The trace is covered by the record seal: editing the event breaks it.
+        let trace_path = directory.path().join(super::TRACE_FILE);
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        std::fs::write(&trace_path, trace.replace("\"refund\"", "\"billing\"")).unwrap();
+        let edited = StoredRecord::open(directory.path()).unwrap();
+        assert!(matches!(
+            edited.record_integrity(&test_seal()),
+            RecordVerification::Untrusted { .. }
+        ));
     }
 
     /// Simulates a finished marker that survived a crash ahead of its trace:

@@ -1535,8 +1535,11 @@ impl Recorder {
             }));
         }
         let hash = sha256_hex(bytes);
+        // A blob already stored under this hash adds no bytes, so it is always
+        // referenced; only new unique data is charged against the budget.
+        let already_stored = state.blobs_written.contains(&hash);
         let within_budget = state.blob_bytes.saturating_add(bytes.len()) <= MAX_BLOB_BYTES;
-        if !within_budget {
+        if !already_stored && !within_budget {
             state.truncated = true;
             return Ok(json!({
                 "bytes": bytes.len(),
@@ -3374,6 +3377,52 @@ mod bounded_record_tests {
             assert!(format!("{error:#}").contains("stdout"), "{error:#}");
             assert!(format!("{error:#}").contains(expected), "{error:#}");
         }
+    }
+
+    #[test]
+    fn repeated_stored_blob_is_referenced_without_a_second_budget_charge() {
+        // Two identical 9 MiB outputs total 18 MiB, past the 16 MiB unique
+        // budget. The second must reference the stored blob, not truncate.
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            working_directory: directory.path(),
+            audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
+        })
+        .unwrap();
+        let payload = vec![b'a'; 9 * 1024 * 1024];
+        let mut state = recorder.state.lock().unwrap();
+        let first = recorder.blob(&mut state, &payload, true).unwrap();
+        let second = recorder.blob(&mut state, &payload, true).unwrap();
+        assert_eq!(first["truncated"], false);
+        assert_eq!(second["truncated"], false);
+        assert!(second["blob"].is_string(), "{second}");
+        assert_eq!(second["blob"], first["blob"]);
+        assert_eq!(second["sha256"], first["sha256"]);
+        assert_eq!(state.blob_bytes, payload.len());
+        assert!(!state.truncated);
+        // A new unique blob that would exceed the budget is still withheld.
+        let other = vec![b'b'; 9 * 1024 * 1024];
+        let third = recorder.blob(&mut state, &other, true).unwrap();
+        assert_eq!(third["truncated"], true);
+        assert!(third["blob"].is_null(), "{third}");
+        assert!(state.truncated);
+        drop(state);
+        // The reused descriptor still names readable, unchanged stored bytes.
+        let stored_name = first["sha256"].as_str().unwrap();
+        let stored =
+            std::fs::read(directory.path().join(super::BLOB_DIR).join(stored_name)).unwrap();
+        assert_eq!(stored, payload);
     }
 
     #[test]

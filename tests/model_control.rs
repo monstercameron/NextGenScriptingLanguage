@@ -1260,3 +1260,21 @@ fn cancelled_native_model_call_closes_socket_requires_retry_and_completed_resume
     assert_eq!(server.join().unwrap(), 2);
     assert!(!cancelled.stderr.is_empty());
 }
+
+#[test]
+fn fixture_dir_miss_fails_closed_with_a_static_fixture_missing_class() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut args = openai_args("https://api.openai.com/v1/responses");
+    args.extend([
+        "--fixture-dir".into(),
+        directory.path().to_string_lossy().into_owned(),
+    ]);
+    let output = run_helper(&args, b"source text", &[]);
+
+    assert!(!output.status.success(), "fixture miss replayed a response");
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "execute-model: fixture_missing"
+    );
+}

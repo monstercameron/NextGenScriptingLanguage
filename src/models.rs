@@ -9,6 +9,7 @@ use crate::model_schema::{parse_unique_json, validate_schema_definition, Duplica
 use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
@@ -133,6 +134,7 @@ struct Options {
     endpoint: Option<String>,
     api_key_env: Option<String>,
     fixture: Option<String>,
+    fixture_dir: Option<String>,
     schema: Option<Value>,
 }
 
@@ -143,6 +145,7 @@ enum FailureClass {
     Input,
     Fixture,
     FixtureMismatch,
+    FixtureMissing,
     CredentialsMissing,
     Transport,
     HttpStatus(u16),
@@ -165,6 +168,7 @@ impl fmt::Display for ModelFailure {
             FailureClass::Input => "input",
             FailureClass::Fixture => "fixture",
             FailureClass::FixtureMismatch => "fixture_mismatch",
+            FailureClass::FixtureMissing => "fixture_missing",
             FailureClass::CredentialsMissing => "credentials_missing",
             FailureClass::Transport => "transport",
             FailureClass::HttpStatus(_) => "http_status",
@@ -216,20 +220,21 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
             failure(FailureClass::Configuration)
         }
     })?;
+    let fixture_mode = options.fixture.is_some() || options.fixture_dir.is_some();
     enforce_offline_mode(
         std::env::var_os("EXECUTE_MODELS_OFFLINE").is_some(),
-        options.fixture.is_some(),
+        fixture_mode,
     )?;
     let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
     validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     // Hermetic fixture runs never open a socket, so loopback endpoints stay
     // usable there without the live-loopback grant below.
-    let allow_loopback = options.fixture.is_some() || model_loopback_allowed();
+    let allow_loopback = fixture_mode || model_loopback_allowed();
     let granted = model_granted_set(&model_origin(&parsed));
     check_endpoint_ssrf(&parsed, allow_loopback, &granted)
         .map_err(|_| failure(FailureClass::Configuration))?;
-    let transport = if options.fixture.is_some() {
+    let transport = if fixture_mode {
         "fixture"
     } else if parsed.scheme() == "https" {
         "https"
@@ -247,6 +252,23 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
         read_fixture(path, &semantic, options.max_bytes).map_err(|error| {
             if error.downcast_ref::<ModelFailure>().is_some() {
                 error
+            } else {
+                failure(FailureClass::Fixture)
+            }
+        })?
+    } else if let Some(dir) = options.fixture_dir.as_deref() {
+        let path = fixture_path_in_dir(dir, &semantic)
+            .map_err(|_| failure(FailureClass::Configuration))?;
+        read_fixture(&path, &semantic, options.max_bytes).map_err(|error| {
+            if error.downcast_ref::<ModelFailure>().is_some() {
+                error
+            } else if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            {
+                // No fixture is recorded for this exact request. The message
+                // is the static class only; it never names the request.
+                failure(FailureClass::FixtureMissing)
             } else {
                 failure(FailureClass::Fixture)
             }
@@ -302,7 +324,7 @@ Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n
          --schema JSON --minimum 0..100 --max-tokens N --timeout-ms N\n\
          --max-bytes N --env-file PATH --endpoint URL\n\
          --api-key-env EXECUTE_MODEL_KEY_NAME\n\
-         --fixture PATH\n\
+         --fixture PATH | --fixture-dir DIR\n\
          --api responses|chat_completions --effort none|low|medium|high|xhigh|max\n\
          --temperature 0..2\n\
 Jev defaults to jev-latest. OpenAI requires --model. Fixture mode never reads\n\
@@ -353,6 +375,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
         endpoint: None,
         api_key_env: None,
         fixture: None,
+        fixture_dir: None,
         schema: None,
     };
     let mut seen = BTreeSet::new();
@@ -435,6 +458,12 @@ fn parse_args(args: &[String]) -> Result<Options> {
                 }
                 options.fixture = Some(value.clone());
             }
+            "--fixture-dir" => {
+                if value.is_empty() {
+                    return Err(failure(FailureClass::Fixture));
+                }
+                options.fixture_dir = Some(value.clone());
+            }
             "--schema" => {
                 let schema = parse_unique_json(value.as_bytes())
                     .map_err(|_| failure(FailureClass::Schema))?;
@@ -444,6 +473,9 @@ fn parse_args(args: &[String]) -> Result<Options> {
             _ => bail!("unknown option"),
         }
         index += 2;
+    }
+    if seen.contains("--fixture") && seen.contains("--fixture-dir") {
+        bail!("fixture and fixture-dir are mutually exclusive");
     }
     validate_options(&mut options, &seen)?;
     Ok(options)
@@ -1117,6 +1149,90 @@ fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
         bail!("fixture response must be a JSON object");
     }
     Ok(response)
+}
+
+/// Canonical form of a semantic request: every object's keys sorted, so the
+/// hash does not depend on insertion order or on serde_json's map backend.
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let sorted: BTreeMap<&str, Value> = map
+                .iter()
+                .map(|(key, item)| (key.as_str(), canonical_json(item)))
+                .collect();
+            Value::Object(
+                sorted
+                    .into_iter()
+                    .map(|(key, item)| (key.to_owned(), item))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        other => other.clone(),
+    }
+}
+
+/// SHA-256 of the canonical JSON of a semantic request, as lowercase hex. It
+/// names the fixture file that replays the request under `--fixture-dir`.
+fn request_hash(request: &Value) -> Result<String> {
+    let bytes = serde_json::to_vec(&canonical_json(request)).context("encoding request")?;
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// The fixture file that replays one request inside a fixture directory.
+fn fixture_path_in_dir(dir: &str, request: &Value) -> Result<String> {
+    let name = format!("{}.json", request_hash(request)?);
+    std::path::Path::new(dir)
+        .join(name)
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("fixture directory path is not UTF-8"))
+}
+
+/// Lint a fixture directory without contacting any provider. Returns the names
+/// of entries that are not clean `<request-hash>.json` fixtures: a file whose
+/// recorded `expected_request` no longer hashes to its name, a malformed file,
+/// or a link. An empty result means every entry is clean. Only names are
+/// returned; file contents are never echoed.
+pub fn lint_fixture_dir(dir: &str) -> Result<Vec<String>> {
+    let mut problems = Vec::new();
+    for entry in std::fs::read_dir(dir).context("reading fixture directory")? {
+        let entry = entry.context("reading fixture directory entry")?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !fixture_is_clean(&entry.path(), &name) {
+            problems.push(name);
+        }
+    }
+    problems.sort();
+    Ok(problems)
+}
+
+fn fixture_is_clean(path: &std::path::Path, file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some(path) = path.to_str() else {
+        return false;
+    };
+    let Ok(mut file) = open_regular_no_follow(path) else {
+        return false;
+    };
+    let cap = DEFAULT_MAX_BYTES.saturating_mul(4).saturating_add(4096);
+    let Ok(bytes) = read_bounded(&mut file, cap, "reading fixture") else {
+        return false;
+    };
+    let Ok(Value::Object(object)) = parse_unique_json(&bytes) else {
+        return false;
+    };
+    if object.len() != 2 || !object.get("response").is_some_and(Value::is_object) {
+        return false;
+    }
+    object
+        .get("expected_request")
+        .is_some_and(|request| request_hash(request).is_ok_and(|hash| hash == stem))
 }
 
 /// The URL that receives the provider request. Responses uses `endpoint` as the
@@ -2859,6 +2975,161 @@ mod unit_tests {
         assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
         let expected = json!({"provider":"jev","kind":"judge","state":"text"});
         assert!(read_fixture(path.to_str().unwrap(), &expected, 1024).is_err());
+    }
+
+    fn fixture_test_response(text: &str) -> Value {
+        json!({
+            "model": "model-under-test",
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{ "type": "output_text", "text": text }]
+            }],
+            "usage": { "input_tokens": 2, "output_tokens": 1 }
+        })
+    }
+
+    fn fixture_test_request(state: &str) -> Value {
+        json!({
+            "provider": "openai",
+            "kind": "generate",
+            "model": "model-under-test",
+            "state": state,
+            "instruction": "return a short result"
+        })
+    }
+
+    fn fixture_dir_args(dir: &std::path::Path) -> Vec<String> {
+        [
+            "generate",
+            "--provider",
+            "openai",
+            "--model",
+            "model-under-test",
+            "--instruction",
+            "return a short result",
+            "--fixture-dir",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain([dir.to_string_lossy().into_owned()])
+        .collect()
+    }
+
+    #[test]
+    fn request_hash_is_sha256_of_sorted_canonical_json() {
+        let expected: String = Sha256::digest(br#"{"a":[{"c":2,"d":3}],"b":1}"#)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            request_hash(&json!({"b": 1, "a": [{"d": 3, "c": 2}]})).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn fixture_dir_replays_the_recorded_request_and_fails_closed_on_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = fixture_test_request("source text");
+        let name = format!("{}.json", request_hash(&expected).unwrap());
+        std::fs::write(
+            temp.path().join(name),
+            json!({"expected_request": expected, "response": fixture_test_response("fixture result")})
+                .to_string(),
+        )
+        .unwrap();
+
+        let mut input: &[u8] = b"source text";
+        let mut output = Vec::new();
+        run(&fixture_dir_args(temp.path()), &mut input, &mut output)
+            .expect("recorded request replays from the fixture directory");
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["transport"], "fixture");
+        assert_eq!(result["text"], "fixture result");
+
+        let mut changed_input: &[u8] = b"changed text";
+        let mut changed_output = Vec::new();
+        let error = run(
+            &fixture_dir_args(temp.path()),
+            &mut changed_input,
+            &mut changed_output,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "fixture_missing");
+        assert!(changed_output.is_empty());
+
+        let absent = temp.path().join("absent-directory");
+        let mut absent_input: &[u8] = b"source text";
+        let error = run(
+            &fixture_dir_args(&absent),
+            &mut absent_input,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "fixture_missing");
+    }
+
+    #[test]
+    fn fixture_and_fixture_dir_are_mutually_exclusive() {
+        let mut args = fixture_dir_args(std::path::Path::new("unused"));
+        args.extend(["--fixture".into(), "fixture.json".into()]);
+        let error = run(&args, &mut &b"source text"[..], &mut Vec::new()).unwrap_err();
+        assert_eq!(diagnostic(&error), "configuration");
+    }
+
+    #[test]
+    fn fixture_lint_names_only_entries_whose_request_no_longer_hashes() {
+        let body = |request: &Value| {
+            json!({"expected_request": request, "response": fixture_test_response("r")}).to_string()
+        };
+        let clean = tempfile::tempdir().unwrap();
+        let request = fixture_test_request("source text");
+        std::fs::write(
+            clean
+                .path()
+                .join(format!("{}.json", request_hash(&request).unwrap())),
+            body(&request),
+        )
+        .unwrap();
+        assert!(lint_fixture_dir(clean.path().to_str().unwrap())
+            .unwrap()
+            .is_empty());
+
+        let dirty = tempfile::tempdir().unwrap();
+        // The recorded request was edited after its file was named: stale.
+        std::fs::write(
+            dirty.path().join(format!("{}.json", "0".repeat(64))),
+            body(&request),
+        )
+        .unwrap();
+        // A matching name whose file carries an extra key is malformed.
+        let extra = json!({"x": 1});
+        let mut with_extra: Value = serde_json::from_str(&body(&extra)).unwrap();
+        with_extra["note"] = json!("extra");
+        std::fs::write(
+            dirty
+                .path()
+                .join(format!("{}.json", request_hash(&extra).unwrap())),
+            with_extra.to_string(),
+        )
+        .unwrap();
+        std::fs::write(dirty.path().join("notes.txt"), "not a fixture").unwrap();
+
+        let mut expected = vec![
+            format!("{}.json", "0".repeat(64)),
+            format!("{}.json", request_hash(&extra).unwrap()),
+            "notes.txt".to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(
+            lint_fixture_dir(dirty.path().to_str().unwrap()).unwrap(),
+            expected
+        );
     }
 
     #[test]

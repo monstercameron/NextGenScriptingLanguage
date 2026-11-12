@@ -231,7 +231,6 @@ impl BrowserSession {
         )?;
         for step in &program.steps {
             let unsupported = match &step.kind {
-                StepKind::Return => Some("reusable-program return"),
                 StepKind::Append { .. }
                 | StepKind::Redirect { .. }
                 | StepKind::Environment { .. } => Some("file redirection and append"),
@@ -380,8 +379,18 @@ impl BrowserSession {
                             jump = Some(finish.saturating_sub(1));
                         }
                     }
-                    StepKind::Return
-                    | StepKind::Try { .. }
+                    StepKind::Return => {
+                        // Same target as native: leave every loop opened inside the
+                        // reusable program, then run its EndCall, which restores the caller.
+                        let frame = frames.last().context("return outside a reusable program")?;
+                        let depth = frame.loop_depth;
+                        let end = *call_end_indices
+                            .last()
+                            .context("return outside a reusable program")?;
+                        loops.unwind_to(depth, &mut bindings)?;
+                        jump = Some(end);
+                    }
+                    StepKind::Try { .. }
                     | StepKind::Catch { .. }
                     | StepKind::Finally
                     | StepKind::EndTry
@@ -849,6 +858,21 @@ mod tests {
         ));
         assert!(response.ok, "{}", response.error);
         assert_eq!(response.stdout, "skip\nskip\nskip\nend\n");
+    }
+
+    #[test]
+    fn return_leaves_the_reusable_program_from_inside_a_loop() {
+        let response = run(concat!(
+            "define a program named first_word\n",
+            "  repeat 3 times\n",
+            "    use value \"early\"\n",
+            "    return\n",
+            "  use value \"late\"\n",
+            "run program first_word as result\n",
+            "run \"printf\" with arguments [\"%s\\n\", result]\n",
+        ));
+        assert!(response.ok, "{}", response.error);
+        assert_eq!(response.stdout, "early\n");
     }
 
     #[test]

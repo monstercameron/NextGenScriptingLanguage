@@ -576,6 +576,256 @@ pub mod dropin {
     }
 }
 
+/// The runtime-owned sudo session (issue #320).
+///
+/// Omarchy's update script asks for the password once with `sudo true` (not `sudo -v`:
+/// under the default `verifypw=all`, `-v` prompts even with passwordless sudo enabled),
+/// refreshes the timestamp every 60 seconds while the run lives, revokes it with `sudo -k`
+/// on every exit path, and withdraws it before third-party code runs. Those later calls
+/// authenticate with the non-updating form (`sudo -N`).
+///
+/// This module holds the argument vectors and the state machine. It runs nothing itself:
+/// the injected runner executes each `SudoCall` exactly as given (no shell), and it is the
+/// only place sudo runs. The caller passes `now` to `authorize` and `tick`, so there is no
+/// clock, thread or timer here. No password, prompt text or other user input is in an
+/// argument vector, an environment entry or an event. sudo reads the password itself from
+/// the terminal the runner gives it.
+///
+/// Lifetime limit. `Drop` runs only when the process unwinds. A process killed with
+/// SIGKILL runs no code, so its timestamp survives until `timestamp_timeout` expires. The
+/// runtime must stop the keepalive with the run and must revoke through a helper that
+/// outlives a killed run (issue #320). This module cannot do that alone.
+pub mod sudo_session {
+    use std::ffi::OsString;
+    use std::io;
+    use std::time::{Duration, Instant};
+
+    /// How long after a successful authorize or refresh `tick` waits before refreshing.
+    /// Omarchy refreshes every 60 seconds.
+    pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+    /// The PATH every sudo call runs with. It is fixed and holds no user or package
+    /// directory, so a `sudo` or `true` placed earlier in the user's PATH (or in a
+    /// PKGBUILD's) is never the one that runs. It is the Ubuntu and Debian `secure_path`
+    /// list, which sudo uses by default there.
+    pub const SANITIZED_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+    /// The environment every sudo call runs with. `LC_ALL=C` keeps sudo's messages in one
+    /// language, so nothing that reads them depends on the user's locale.
+    pub const SUDO_ENV: &[(&str, &str)] = &[("PATH", SANITIZED_PATH), ("LC_ALL", "C")];
+
+    /// One sudo invocation as data: `argv[0]` is `sudo`, and `env` is the complete
+    /// environment it runs with. The runner executes this exactly, without a shell.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SudoCall {
+        pub argv: Vec<OsString>,
+        pub env: &'static [(&'static str, &'static str)],
+    }
+
+    fn call(args: &[&str]) -> SudoCall {
+        SudoCall {
+            argv: std::iter::once("sudo")
+                .chain(args.iter().copied())
+                .map(OsString::from)
+                .collect(),
+            env: SUDO_ENV,
+        }
+    }
+
+    /// `sudo true`: the prompting authorization. It is not `sudo -v`, which prompts under
+    /// the default `verifypw=all` even when passwordless sudo is enabled.
+    pub fn authorize_call() -> SudoCall {
+        call(&["true"])
+    }
+
+    /// `sudo -n true`: refresh the timestamp. `-n` makes sudo fail instead of prompting.
+    pub fn refresh_call() -> SudoCall {
+        call(&["-n", "true"])
+    }
+
+    /// `sudo -k`: drop the cached credential.
+    pub fn revoke_call() -> SudoCall {
+        call(&["-k"])
+    }
+
+    /// `sudo -N <command...>`: the non-updating form, for a command run in an untrusted
+    /// phase. The command is a vector of arguments, never a shell string.
+    pub fn no_update_call(command: &[OsString]) -> SudoCall {
+        let mut argv = vec![OsString::from("sudo"), OsString::from("-N")];
+        argv.extend(command.iter().cloned());
+        SudoCall {
+            argv,
+            env: SUDO_ENV,
+        }
+    }
+
+    /// The part of an exit status the session needs. A process the runner could not start
+    /// is reported as an `Err` from the runner instead.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Exit {
+        pub success: bool,
+        pub code: Option<i32>,
+    }
+
+    /// What a transition did. It carries no password and no user input.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SudoEvent {
+        Authorized,
+        Refreshed,
+        RefreshFailed,
+        Withheld,
+        Revoked,
+        RevokeFailed,
+    }
+
+    /// A refused or failed transition.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SudoError {
+        /// `sudo true` failed (wrong password, no permission, or cancelled). The session
+        /// stays Unauthorized.
+        AuthorizeFailed { code: Option<i32> },
+        /// `authorize` was called on a session that is not Unauthorized. No sudo ran.
+        NotUnauthorized,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Unauthorized,
+        Active {
+            refreshed_at: Instant,
+        },
+        /// A refresh failed. `tick` does nothing more, and the failure was reported once.
+        Lost,
+        /// Withheld for an untrusted phase. `tick` does nothing, and sudo is never refreshed.
+        Withheld,
+        Ended,
+    }
+
+    /// A run-level sudo session over an injected runner.
+    pub struct SudoSession<R>
+    where
+        R: FnMut(&SudoCall) -> io::Result<Exit>,
+    {
+        runner: R,
+        interval: Duration,
+        state: State,
+        /// True from a successful authorize until a revoke succeeds. A failed revoke leaves
+        /// it true, so a later revoke (including the one in `Drop`) tries again.
+        credential_may_be_live: bool,
+    }
+
+    impl<R> SudoSession<R>
+    where
+        R: FnMut(&SudoCall) -> io::Result<Exit>,
+    {
+        pub fn new(runner: R, interval: Duration) -> Self {
+            Self {
+                runner,
+                interval,
+                state: State::Unauthorized,
+                credential_may_be_live: false,
+            }
+        }
+
+        /// True while `tick` will refresh the credential.
+        pub fn is_active(&self) -> bool {
+            matches!(self.state, State::Active { .. })
+        }
+
+        /// Ask for the password with `sudo true`. Moves Unauthorized to Active.
+        pub fn authorize(&mut self, now: Instant) -> Result<SudoEvent, SudoError> {
+            if self.state != State::Unauthorized {
+                return Err(SudoError::NotUnauthorized);
+            }
+            self.run(&authorize_call())
+                .map_err(|code| SudoError::AuthorizeFailed { code })?;
+            self.credential_may_be_live = true;
+            self.state = State::Active { refreshed_at: now };
+            Ok(SudoEvent::Authorized)
+        }
+
+        /// Refresh with `sudo -n true` when the interval has elapsed since the last
+        /// refresh, and only while Active. A failed refresh moves the session to Lost and
+        /// is returned once. The refresh never prompts.
+        pub fn tick(&mut self, now: Instant) -> Option<SudoEvent> {
+            let State::Active { refreshed_at } = self.state else {
+                return None;
+            };
+            if now.saturating_duration_since(refreshed_at) < self.interval {
+                return None;
+            }
+            match self.run(&refresh_call()) {
+                Ok(()) => {
+                    self.state = State::Active { refreshed_at: now };
+                    Some(SudoEvent::Refreshed)
+                }
+                Err(_) => {
+                    self.state = State::Lost;
+                    Some(SudoEvent::RefreshFailed)
+                }
+            }
+        }
+
+        /// Revoke, then withhold the session so later phases cannot ride a cached
+        /// credential. Returns the revoke outcome (if a revoke was needed) and then
+        /// `Withheld`. Once withheld, `tick` does nothing.
+        pub fn withhold(&mut self) -> Vec<SudoEvent> {
+            let mut events: Vec<SudoEvent> = self.revoke().into_iter().collect();
+            if matches!(
+                self.state,
+                State::Unauthorized | State::Active { .. } | State::Lost
+            ) {
+                self.state = State::Withheld;
+                events.push(SudoEvent::Withheld);
+            }
+            events
+        }
+
+        /// Revoke on the way out of the run, and end the session. Idempotent: once a
+        /// revoke has succeeded, a second call runs no sudo. A failed revoke is returned
+        /// as `RevokeFailed`, and the next revoke tries again.
+        pub fn end(&mut self) -> Option<SudoEvent> {
+            let event = self.revoke();
+            self.state = State::Ended;
+            event
+        }
+
+        /// `None` when no credential may be live. Otherwise runs `sudo -k` and reports it.
+        fn revoke(&mut self) -> Option<SudoEvent> {
+            if !self.credential_may_be_live {
+                return None;
+            }
+            match self.run(&revoke_call()) {
+                Ok(()) => {
+                    self.credential_may_be_live = false;
+                    Some(SudoEvent::Revoked)
+                }
+                Err(_) => Some(SudoEvent::RevokeFailed),
+            }
+        }
+
+        fn run(&mut self, call: &SudoCall) -> Result<(), Option<i32>> {
+            match (self.runner)(call) {
+                Ok(exit) if exit.success => Ok(()),
+                Ok(exit) => Err(exit.code),
+                Err(_) => Err(None),
+            }
+        }
+    }
+
+    impl<R> Drop for SudoSession<R>
+    where
+        R: FnMut(&SudoCall) -> io::Result<Exit>,
+    {
+        /// Revokes a credential this session may still hold. The runner's answer is ignored,
+        /// because nothing can be reported from `drop`. A run that is killed with SIGKILL
+        /// never gets here, which is why the runtime also ends the keepalive with the run.
+        fn drop(&mut self) {
+            let _ = self.revoke();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,5 +1330,269 @@ mod tests {
     fn dropin_empty_command_vector_is_an_error_not_a_panic() {
         assert!(dropin::command_for(&[], None).is_err());
         assert!(dropin::run_argv(&[], Some(Path::new("/x"))).is_err());
+    }
+
+    use std::ffi::OsString;
+    use std::time::{Duration, Instant};
+    use sudo_session::{
+        no_update_call, Exit, SudoCall, SudoError, SudoEvent, SudoSession, REFRESH_INTERVAL,
+        SUDO_ENV,
+    };
+
+    type CallLog = std::rc::Rc<std::cell::RefCell<Vec<SudoCall>>>;
+
+    /// A runner that records every call. `script` gives the success of each call in order;
+    /// calls past the end of `script` succeed.
+    fn sudo_fake(log: &CallLog, script: &[bool]) -> impl FnMut(&SudoCall) -> std::io::Result<Exit> {
+        let log = log.clone();
+        let mut script: std::collections::VecDeque<bool> = script.iter().copied().collect();
+        move |call: &SudoCall| {
+            log.borrow_mut().push(call.clone());
+            let success = script.pop_front().unwrap_or(true);
+            Ok(Exit {
+                success,
+                code: Some(if success { 0 } else { 1 }),
+            })
+        }
+    }
+
+    fn argvs(log: &CallLog) -> Vec<Vec<String>> {
+        log.borrow()
+            .iter()
+            .map(|call| {
+                call.argv
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|word| word.to_string()).collect()
+    }
+
+    #[test]
+    fn sudo_happy_path_authorizes_refreshes_and_revokes_with_fixed_env() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        assert_eq!(session.authorize(t0), Ok(SudoEvent::Authorized));
+        assert!(session.is_active());
+        assert_eq!(
+            session.tick(t0 + REFRESH_INTERVAL),
+            Some(SudoEvent::Refreshed)
+        );
+        assert_eq!(session.end(), Some(SudoEvent::Revoked));
+        assert_eq!(
+            argvs(&log),
+            vec![
+                words(&["sudo", "true"]),
+                words(&["sudo", "-n", "true"]),
+                words(&["sudo", "-k"]),
+            ]
+        );
+        assert!(log.borrow().iter().all(|call| call.env == SUDO_ENV));
+        assert!(SUDO_ENV.contains(&("PATH", sudo_session::SANITIZED_PATH)));
+        assert!(SUDO_ENV.contains(&("LC_ALL", "C")));
+    }
+
+    #[test]
+    fn sudo_refresh_waits_for_the_interval_then_fires_once_per_interval() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(session.tick(t0), None);
+        assert_eq!(session.tick(t0 + Duration::from_secs(59)), None);
+        assert_eq!(
+            session.tick(t0 + Duration::from_secs(60)),
+            Some(SudoEvent::Refreshed)
+        );
+        assert_eq!(session.tick(t0 + Duration::from_secs(61)), None);
+        assert_eq!(session.tick(t0 + Duration::from_secs(119)), None);
+        assert_eq!(
+            session.tick(t0 + Duration::from_secs(120)),
+            Some(SudoEvent::Refreshed)
+        );
+        let refreshes = argvs(&log)
+            .into_iter()
+            .filter(|argv| *argv == words(&["sudo", "-n", "true"]))
+            .count();
+        assert_eq!(refreshes, 2);
+    }
+
+    #[test]
+    fn sudo_failed_refresh_is_reported_once_and_never_prompts() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        // Call 1 (authorize) succeeds, call 2 (refresh) fails, call 3 (revoke) succeeds.
+        let mut session = SudoSession::new(sudo_fake(&log, &[true, false]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(
+            session.tick(t0 + REFRESH_INTERVAL),
+            Some(SudoEvent::RefreshFailed)
+        );
+        assert!(!session.is_active());
+        assert_eq!(session.tick(t0 + Duration::from_secs(300)), None);
+        assert_eq!(session.tick(t0 + Duration::from_secs(600)), None);
+        assert_eq!(session.end(), Some(SudoEvent::Revoked));
+        assert_eq!(
+            argvs(&log),
+            vec![
+                words(&["sudo", "true"]),
+                words(&["sudo", "-n", "true"]),
+                words(&["sudo", "-k"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn sudo_withhold_revokes_and_tick_then_does_nothing() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(
+            session.withhold(),
+            vec![SudoEvent::Revoked, SudoEvent::Withheld]
+        );
+        assert_eq!(session.tick(t0 + Duration::from_secs(600)), None);
+        assert_eq!(session.end(), None);
+        assert_eq!(
+            argvs(&log),
+            vec![words(&["sudo", "true"]), words(&["sudo", "-k"])]
+        );
+    }
+
+    #[test]
+    fn sudo_withhold_cannot_be_authorized_again() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        session.withhold();
+        assert_eq!(session.authorize(t0), Err(SudoError::NotUnauthorized));
+        assert_eq!(argvs(&log).len(), 2);
+    }
+
+    #[test]
+    fn sudo_end_twice_revokes_once() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(session.end(), Some(SudoEvent::Revoked));
+        assert_eq!(session.end(), None);
+        assert_eq!(
+            argvs(&log),
+            vec![words(&["sudo", "true"]), words(&["sudo", "-k"])]
+        );
+    }
+
+    #[test]
+    fn sudo_drop_while_active_revokes() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        {
+            let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+            session.authorize(t0).unwrap();
+        }
+        assert_eq!(
+            argvs(&log),
+            vec![words(&["sudo", "true"]), words(&["sudo", "-k"])]
+        );
+    }
+
+    #[test]
+    fn sudo_drop_after_end_does_not_revoke_again() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        {
+            let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+            session.authorize(t0).unwrap();
+            session.end();
+        }
+        assert_eq!(
+            argvs(&log),
+            vec![words(&["sudo", "true"]), words(&["sudo", "-k"])]
+        );
+    }
+
+    #[test]
+    fn sudo_revoke_failure_is_reported_and_the_drop_retries_it() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        {
+            // Call 1 (authorize) succeeds, call 2 (end's revoke) fails, call 3 (drop) succeeds.
+            let mut session = SudoSession::new(sudo_fake(&log, &[true, false]), REFRESH_INTERVAL);
+            session.authorize(t0).unwrap();
+            assert_eq!(session.end(), Some(SudoEvent::RevokeFailed));
+        }
+        assert_eq!(
+            argvs(&log),
+            vec![
+                words(&["sudo", "true"]),
+                words(&["sudo", "-k"]),
+                words(&["sudo", "-k"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn sudo_withhold_reports_a_failed_revoke_and_end_retries_it() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[true, false]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(
+            session.withhold(),
+            vec![SudoEvent::RevokeFailed, SudoEvent::Withheld]
+        );
+        assert_eq!(session.tick(t0 + REFRESH_INTERVAL), None);
+        assert_eq!(session.end(), Some(SudoEvent::Revoked));
+        assert_eq!(session.end(), None);
+        assert_eq!(argvs(&log).len(), 3);
+    }
+
+    #[test]
+    fn sudo_failed_authorize_stays_unauthorized_and_leaves_nothing_to_revoke() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        {
+            let mut session = SudoSession::new(sudo_fake(&log, &[false]), REFRESH_INTERVAL);
+            assert_eq!(
+                session.authorize(t0),
+                Err(SudoError::AuthorizeFailed { code: Some(1) })
+            );
+            assert_eq!(session.tick(t0 + REFRESH_INTERVAL), None);
+        }
+        assert_eq!(argvs(&log), vec![words(&["sudo", "true"])]);
+    }
+
+    #[test]
+    fn sudo_second_authorize_is_refused_without_running_sudo() {
+        let log = CallLog::default();
+        let t0 = Instant::now();
+        let mut session = SudoSession::new(sudo_fake(&log, &[]), REFRESH_INTERVAL);
+        session.authorize(t0).unwrap();
+        assert_eq!(session.authorize(t0), Err(SudoError::NotUnauthorized));
+        assert_eq!(argvs(&log), vec![words(&["sudo", "true"])]);
+    }
+
+    #[test]
+    fn sudo_no_update_call_is_an_argument_vector_on_the_fixed_env() {
+        let command = [OsString::from("makepkg"), OsString::from("--syncdeps")];
+        let call = no_update_call(&command);
+        assert_eq!(
+            call.argv,
+            vec![
+                OsString::from("sudo"),
+                OsString::from("-N"),
+                OsString::from("makepkg"),
+                OsString::from("--syncdeps"),
+            ]
+        );
+        assert_eq!(call.env, SUDO_ENV);
     }
 }

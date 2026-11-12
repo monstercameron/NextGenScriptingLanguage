@@ -185,6 +185,10 @@ name = "issue_505_act_on"
 required-features = ["model"]
 
 [[test]]
+name = "issue_377_model_budget_exhaustion"
+required-features = ["model"]
+
+[[test]]
 name = "issue_725_observer_scope"
 required-features = ["test-fixtures"]
 

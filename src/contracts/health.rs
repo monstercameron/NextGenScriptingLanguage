@@ -12,6 +12,8 @@
 use super::{deserialize_present, valid_capability_id, valid_outcome_name, AppletContract, Effect};
 use crate::contracts::EffectReversibilityStatus;
 use crate::model_schema::recovery::ESCALATE;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{ast::Program, manifest::Registry, modules::program_invocations};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -627,6 +629,68 @@ pub fn failing_probes(
             })
         })
         .collect()
+}
+
+/// A declared probe that did not pass, for one applet the program uses.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppletProbeFailure {
+    /// The applet whose contract declares the probe.
+    pub applet: String,
+    /// The probe that did not pass, with its evidence.
+    pub failure: ProbeFailure,
+}
+
+/// The health probes declared by each applet contract that `program` uses,
+/// keyed by the applet's canonical name. Applets without probes are omitted,
+/// and direct executables have no contract, so they are skipped. An applet the
+/// registry cannot resolve is an error. Nothing here runs a probe.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn program_health_probes(
+    program: &Program,
+    registry: &Registry,
+) -> Result<BTreeMap<String, Vec<HealthProbe>>> {
+    let mut declared = BTreeMap::new();
+    for call in program_invocations(program) {
+        if call.direct {
+            continue;
+        }
+        let manifest = registry.resolve_call(call)?;
+        let Some(contract) = manifest.execution_contract() else {
+            continue;
+        };
+        if contract.health.is_empty() {
+            continue;
+        }
+        declared
+            .entry(manifest.name.clone())
+            .or_insert_with(|| contract.health.clone());
+    }
+    Ok(declared)
+}
+
+/// Check every declared probe of the applets `program` uses against the typed
+/// results supplied per applet (`results[applet][probe]`), and return the
+/// failures in applet then declaration order. A probe with no supplied result
+/// fails with evidence saying so. Nothing here runs a probe.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn program_failing_probes(
+    program: &Program,
+    registry: &Registry,
+    results: &BTreeMap<String, BTreeMap<String, Value>>,
+) -> Result<Vec<AppletProbeFailure>> {
+    let no_results = BTreeMap::new();
+    let mut failures = Vec::new();
+    for (applet, probes) in program_health_probes(program, registry)? {
+        let supplied = results.get(&applet).unwrap_or(&no_results);
+        for failure in failing_probes(&probes, supplied) {
+            failures.push(AppletProbeFailure {
+                applet: applet.clone(),
+                failure,
+            });
+        }
+    }
+    Ok(failures)
 }
 
 #[cfg(test)]
@@ -1384,5 +1448,82 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].name, "db_up");
         assert_eq!(failures[0].evidence, "no result was supplied");
+    }
+
+    /// A registry with one applet that declares two probes and one that declares none.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn probed_registry() -> Registry {
+        Registry::from_sources(&[
+            json!({
+                "name": "sys.check",
+                "binary": "sys-check",
+                "arguments": [],
+                "contract": {
+                    "version": 1,
+                    "health": [
+                        probe("db_up"),
+                        {
+                            "name": "queue_up",
+                            "applet": "sys.probe",
+                            "expect": {"present": {"pointer": "/depth"}},
+                            "timeout_ms": 5000,
+                            "interval_ms": 30000
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+            json!({
+                "name": "sys.plain",
+                "binary": "sys-plain",
+                "arguments": [],
+                "contract": {"version": 1}
+            })
+            .to_string(),
+        ])
+        .unwrap()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_program_report_names_only_the_failing_probe_of_a_used_applet() {
+        let registry = probed_registry();
+        let program = crate::parser::parse("run sys.check\nrun sys.plain\n").unwrap();
+        let results = BTreeMap::from([(
+            "sys.check".to_owned(),
+            BTreeMap::from([
+                ("db_up".to_owned(), json!({"state": "down"})),
+                ("queue_up".to_owned(), json!({"depth": 3})),
+            ]),
+        )]);
+        assert_eq!(
+            program_failing_probes(&program, &registry, &results).unwrap(),
+            vec![AppletProbeFailure {
+                applet: "sys.check".to_owned(),
+                failure: ProbeFailure {
+                    name: "db_up".to_owned(),
+                    evidence: "/state is \"down\", expected \"up\"".to_owned(),
+                },
+            }]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_program_lists_each_probed_applet_once_and_skips_unprobed_ones() {
+        let registry = probed_registry();
+        let program =
+            crate::parser::parse("run sys.check\nrun sys.check\nrun sys.plain\n").unwrap();
+        let declared = program_health_probes(&program, &registry).unwrap();
+        assert_eq!(declared.len(), 1);
+        assert_eq!(
+            declared["sys.check"]
+                .iter()
+                .map(|probe| probe.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["db_up", "queue_up"]
+        );
+        let plain = crate::parser::parse("run sys.plain\n").unwrap();
+        assert!(program_health_probes(&plain, &registry).unwrap().is_empty());
     }
 }

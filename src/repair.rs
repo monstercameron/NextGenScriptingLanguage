@@ -1035,6 +1035,103 @@ pub fn from_record_boundary(
     Ok((boundary, failed_line))
 }
 
+/// The closed set of strategies `repair --suggest` may choose among. Choosing one
+/// is left to a classifier; this type only names the set and validates a label.
+/// There is no variant for `remove`, `replace-command` or `insert-before`, so a
+/// suggestion can never name them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    /// Run the failed step again, as `add-retry`.
+    RetryTransient,
+    /// Change one parameter to a value from a bounded candidate list, as `set-parameter`.
+    AdjustParameter,
+    /// Report the input problem only; no operation is built.
+    FixInput,
+    /// Stop and hand the failure to a person or an agent.
+    Escalate,
+}
+
+/// Every strategy, in the order a suggestion lists them.
+pub const STRATEGIES: [Strategy; 4] = [
+    Strategy::RetryTransient,
+    Strategy::AdjustParameter,
+    Strategy::FixInput,
+    Strategy::Escalate,
+];
+
+/// The most retries a suggestion may ask for.
+pub const SUGGESTED_RETRY_LIMIT: u32 = 3;
+
+impl Strategy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RetryTransient => "retry-transient",
+            Self::AdjustParameter => "adjust-parameter",
+            Self::FixInput => "fix-input",
+            Self::Escalate => "escalate",
+        }
+    }
+
+    /// Read a label returned by a classifier. A label outside the closed set is
+    /// invalid output: it is rejected here, never turned into an operation.
+    pub fn from_label(label: &str) -> Result<Self> {
+        STRATEGIES
+            .iter()
+            .copied()
+            .find(|strategy| strategy.label() == label)
+            .ok_or_else(|| {
+                anyhow!(
+                    "invalid repair strategy label; expected one of retry-transient, adjust-parameter, fix-input, escalate"
+                )
+            })
+    }
+}
+
+/// Deterministic facts about a failed step that decide which strategies apply.
+/// The caller derives them from the checkpoint, the record and the manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailureFacts {
+    /// The failure code is one the program declares as possibly transient.
+    pub retryable_code: bool,
+    /// The step's effects are declared idempotent, so running it again repeats nothing.
+    pub idempotent: bool,
+    /// The failure names a bad input, such as a missing or unwritable path.
+    pub input_problem: bool,
+    /// A parameter of the step has a manifest schema with a bounded candidate set.
+    pub bounded_parameter: bool,
+}
+
+/// The strategies a failure is eligible for, in closed-set order. `Escalate` is
+/// always eligible, so the result is never empty. A non-idempotent step is never
+/// eligible for `RetryTransient`, whatever its code.
+pub fn eligible_strategies(facts: FailureFacts) -> Vec<Strategy> {
+    let mut eligible = Vec::new();
+    if facts.retryable_code && facts.idempotent {
+        eligible.push(Strategy::RetryTransient);
+    }
+    if facts.bounded_parameter {
+        eligible.push(Strategy::AdjustParameter);
+    }
+    if facts.input_problem {
+        eligible.push(Strategy::FixInput);
+    }
+    eligible.push(Strategy::Escalate);
+    eligible
+}
+
+/// Build the `add-retry` operation for a `RetryTransient` suggestion. The count is
+/// clamped to 1 through `SUGGESTED_RETRY_LIMIT`, and the text goes through the same
+/// parser as an operation typed by a person. Refused unless the facts allow a retry.
+pub fn retry_operation(facts: FailureFacts, line: usize, count: u32) -> Result<Operation> {
+    if !(facts.retryable_code && facts.idempotent) {
+        bail!(
+            "a step is retried only when its failure is retryable and its effects are idempotent"
+        );
+    }
+    let count = count.clamp(1, SUGGESTED_RETRY_LIMIT);
+    Operation::parse(&format!("add-retry {line} {count}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1994,5 +2091,109 @@ mod tests {
 
         std::fs::write(&program, &plan.before).unwrap();
         ensure_program_unchanged(&program, &plan).unwrap();
+    }
+
+    fn facts(retryable_code: bool, idempotent: bool, input_problem: bool) -> FailureFacts {
+        FailureFacts {
+            retryable_code,
+            idempotent,
+            input_problem,
+            bounded_parameter: false,
+        }
+    }
+
+    #[test]
+    fn suggestion_strategies_come_only_from_the_closed_set() {
+        let labels: Vec<&str> = STRATEGIES.iter().map(|s| s.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "retry-transient",
+                "adjust-parameter",
+                "fix-input",
+                "escalate"
+            ]
+        );
+        for label in labels {
+            assert_eq!(Strategy::from_label(label).unwrap().label(), label);
+        }
+        for invalid in [
+            "remove",
+            "replace-command",
+            "insert-before",
+            "",
+            "RETRY-TRANSIENT",
+            " escalate",
+        ] {
+            assert!(
+                Strategy::from_label(invalid).is_err(),
+                "{invalid:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn transient_exit_on_an_idempotent_step_is_eligible_for_retry() {
+        let eligible = eligible_strategies(facts(true, true, false));
+        assert_eq!(eligible, [Strategy::RetryTransient, Strategy::Escalate]);
+    }
+
+    #[test]
+    fn non_idempotent_steps_never_get_a_retry_suggestion() {
+        for input_problem in [false, true] {
+            let eligible = eligible_strategies(facts(true, false, input_problem));
+            assert!(
+                !eligible.contains(&Strategy::RetryTransient),
+                "{eligible:?}"
+            );
+            assert!(retry_operation(facts(true, false, input_problem), 4, 2).is_err());
+        }
+    }
+
+    #[test]
+    fn unwritable_parameter_path_is_an_input_problem_not_a_retry() {
+        let eligible = eligible_strategies(facts(false, true, true));
+        assert_eq!(eligible, [Strategy::FixInput, Strategy::Escalate]);
+    }
+
+    #[test]
+    fn deterministic_failure_only_escalates() {
+        let eligible = eligible_strategies(facts(false, true, false));
+        assert_eq!(eligible, [Strategy::Escalate]);
+    }
+
+    #[test]
+    fn bounded_parameter_makes_adjust_parameter_eligible() {
+        let mut bounded = facts(false, true, true);
+        bounded.bounded_parameter = true;
+        assert_eq!(
+            eligible_strategies(bounded),
+            [
+                Strategy::AdjustParameter,
+                Strategy::FixInput,
+                Strategy::Escalate
+            ]
+        );
+    }
+
+    #[test]
+    fn retry_operation_is_built_by_the_existing_parser_with_a_clamped_count() {
+        let retry = facts(true, true, false);
+        assert_eq!(
+            retry_operation(retry, 4, 2).unwrap(),
+            Operation::AddRetry { line: 4, count: 2 }
+        );
+        assert_eq!(
+            retry_operation(retry, 4, 0).unwrap(),
+            Operation::AddRetry { line: 4, count: 1 }
+        );
+        assert_eq!(
+            retry_operation(retry, 4, 99).unwrap(),
+            Operation::AddRetry {
+                line: 4,
+                count: SUGGESTED_RETRY_LIMIT
+            }
+        );
+        assert!(retry_operation(facts(false, true, false), 4, 2).is_err());
     }
 }

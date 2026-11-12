@@ -51,6 +51,23 @@ fn recorded_stdout(stdout: &[u8]) -> StepResult {
     }
 }
 
+/// Task groups accept only named applets, so the parallel tests need an inline
+/// manifest for `printf` (direct quoted commands are refused inside a group).
+fn printf_registry() -> Registry {
+    Registry::from_sources(&[serde_json::json!({
+        "name": "observe.printf",
+        "binary": "printf",
+        "accepts_stdin": false,
+        "cacheable": false,
+        "parameters": {
+            "arguments": { "type": "string", "required": true }
+        },
+        "arguments": [{ "parameter": "arguments" }]
+    })
+    .to_string()])
+    .unwrap()
+}
+
 fn mentions(request: &StepRequest, word: &str) -> bool {
     request
         .argv
@@ -189,7 +206,6 @@ fn a_record_observer_does_not_record_an_unrelated_run_on_another_thread() {
 }
 
 #[test]
-#[ignore = "suspected defect: a parallel group's branches are not offered to the replay observer (cause not traced; see report)"]
 fn a_replay_observer_still_offers_each_branch_of_a_parallel_group_in_its_own_run() {
     let _turn = install_turn();
     let cwd = tempfile::tempdir().unwrap();
@@ -197,10 +213,10 @@ fn a_replay_observer_still_offers_each_branch_of_a_parallel_group_in_its_own_run
     let _guard = observe::install(observer.clone()).unwrap();
 
     let program = parser::parse(
-        "parallel at most 2 as group\n  run \"printf\" with arguments [\"left\"] as first\n  run \"printf\" with arguments [\"right\"] as second\n",
+        "parallel at most 2 as group\n  run observe.printf with arguments \"left\" as first\n  run observe.printf with arguments \"right\" as second\n",
     )
     .unwrap();
-    runtime::run(&program, &Registry::default(), &options(cwd.path())).unwrap();
+    runtime::run(&program, &printf_registry(), &options(cwd.path())).unwrap();
 
     let offered = observer.offered.lock().unwrap();
     assert!(
@@ -214,7 +230,6 @@ fn a_replay_observer_still_offers_each_branch_of_a_parallel_group_in_its_own_run
 }
 
 #[test]
-#[ignore = "suspected defect: a parallel group's branches are not recorded by the observer (cause not traced; see report)"]
 fn a_record_observer_keeps_each_branch_of_a_parallel_group_in_its_own_run() {
     let _turn = install_turn();
     let cwd = tempfile::tempdir().unwrap();
@@ -222,10 +237,10 @@ fn a_record_observer_keeps_each_branch_of_a_parallel_group_in_its_own_run() {
     let _guard = observe::install(observer.clone()).unwrap();
 
     let program = parser::parse(
-        "parallel at most 2 as group\n  run \"printf\" with arguments [\"left\"] as first\n  run \"printf\" with arguments [\"right\"] as second\n",
+        "parallel at most 2 as group\n  run observe.printf with arguments \"left\" as first\n  run observe.printf with arguments \"right\" as second\n",
     )
     .unwrap();
-    runtime::run(&program, &Registry::default(), &options(cwd.path())).unwrap();
+    runtime::run(&program, &printf_registry(), &options(cwd.path())).unwrap();
 
     let finished = observer.finished.lock().unwrap();
     assert!(

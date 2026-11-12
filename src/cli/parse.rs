@@ -32,6 +32,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut json = false;
     let mut diagnostic_explain = None;
     let mut deny_warnings = false;
+    let mut fix = false;
     let mut resolve = false;
     let mut explain_version = None;
     #[cfg(feature = "agent-advisory")]
@@ -134,6 +135,12 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     bail!("--resolve may be specified only once");
                 }
                 resolve = true;
+            }
+            "--fix" if command == "check" => {
+                if fix {
+                    bail!("--fix may be specified only once");
+                }
+                fix = true;
             }
             "--explain-version" if command == "explain" || command == "run" => {
                 if explain_version.is_some() {
@@ -570,6 +577,11 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         (None, true) => PathBuf::new(),
         (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
     };
+    if fix && file.to_str() == Some("/dev/stdin") {
+        bail!(
+            "--fix writes the program file back, so it cannot read the program from standard input"
+        );
+    }
     if command == "resume" && checkpoint_dir.is_none() && from_record_dir.is_none() {
         bail!("resume requires --checkpoint DIR or --from-record DIR");
     }
@@ -601,6 +613,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         json,
         diagnostic_explain,
         deny_warnings,
+        fix,
         resolve,
         explain_version,
         allow,

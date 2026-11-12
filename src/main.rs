@@ -192,6 +192,10 @@ fn register_cancellation_signal(
     }
 }
 
+/// Set in a daemon child, whose request already installed its own panic hook.
+static FORWARDED_RUN_CHILD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn main() {
     #[cfg(unix)]
     if let Err(error) = runtime::mark_inherited_descriptors_close_on_exec() {
@@ -312,6 +316,7 @@ fn daemon_forward(arguments: &[String]) -> Option<i32> {
 /// daemon's preloaded registry through the finite-check snapshot seam. Every other request
 /// takes the normal path, which loads its own registry.
 fn execute_forwarded(arguments: Vec<String>, registry: &Registry) -> Result<()> {
+    FORWARDED_RUN_CHILD.store(true, std::sync::atomic::Ordering::Relaxed);
     flow::security::install_panic_hook("daemon-run", None);
     let Some(args) = parse_args(&arguments)? else {
         return execute_arguments(arguments);
@@ -770,6 +775,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "shim") {
         return cli::shim::cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "grammar") {
+        return grammar_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
@@ -812,6 +820,10 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
+    if args.fix {
+        apply_check_fixes(&args)?;
+    }
+
     if args.command == "check" {
         let json = args.json;
         let path = args.file.to_string_lossy().into_owned();
@@ -825,65 +837,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         if source.as_deref().is_some_and(is_graph_source) {
             bail!("graph programs require the graph feature; rebuild with --features graph");
         }
-        let (static_diagnostics, finite_check_snapshot) = match source {
-            Some(source)
-                if !is_screen_source(&source)
-                    && !flow::stream::is_stream(&source)
-                    && !is_graph_source(&source) =>
-            {
-                match load_registry(
-                    args.manifest_dir.clone(),
-                    args.manifest_catalog.clone(),
-                    ManifestCheck::Full,
-                ) {
-                    Ok(registry) => {
-                        // The policy must be installed here too: static analysis reads
-                        // the files that the program calls, and those reads are authorized.
-                        let policies = args
-                            .capability_policy
-                            .as_deref()
-                            .map(load_capability_policy)
-                            .transpose()
-                            .and_then(|capability| {
-                                args.data_flow_policy
-                                    .as_deref()
-                                    .map(load_data_flow_policy)
-                                    .transpose()
-                                    .map(|data_flow| (capability, data_flow))
-                            });
-                        match policies {
-                            Ok((capability, data_flow)) => {
-                                let registry = install_workflow_policy_state(
-                                    registry,
-                                    capability.as_ref(),
-                                    data_flow.as_ref(),
-                                );
-                                let mut diagnostics = flow::diagnostics::analyze_source_at(
-                                    &source,
-                                    Some(&args.file),
-                                    &registry,
-                                );
-                                if args.resolve {
-                                    diagnostics.extend(
-                                        flow::diagnostics::resolve_executable_diagnostics(
-                                            &source,
-                                            Some(&args.file),
-                                            &registry,
-                                        ),
-                                    );
-                                }
-                                (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
-                            }
-                            Err(_) => (Vec::new(), None),
-                        }
-                    }
-                    // Diagnostics are best effort. Keep the authoritative load at
-                    // its existing point so catalog errors retain their ordering.
-                    Err(_) => (Vec::new(), None),
-                }
-            }
-            _ => (Vec::new(), None),
-        };
+        let (static_diagnostics, finite_check_snapshot) = static_check_diagnostics(&args, source);
         let diagnostic_source = if json {
             finite_check_snapshot
                 .as_ref()
@@ -997,6 +951,123 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         return Ok(());
     }
     execute_workflow(args, None)
+}
+
+/// The static diagnostics of `check` for one source text, under the policies it runs with.
+/// `check` and `check --fix` both call it, so a fix comes from the same analysis.
+fn static_check_diagnostics(
+    args: &Args,
+    source: Option<String>,
+) -> (
+    Vec<flow::diagnostics::Diagnostic>,
+    Option<FiniteCheckSnapshot>,
+) {
+    match source {
+        Some(source)
+            if !is_screen_source(&source)
+                && !flow::stream::is_stream(&source)
+                && !is_graph_source(&source) =>
+        {
+            match load_registry(
+                args.manifest_dir.clone(),
+                args.manifest_catalog.clone(),
+                ManifestCheck::Full,
+            ) {
+                Ok(registry) => {
+                    // The policy must be installed here too: static analysis reads
+                    // the files that the program calls, and those reads are authorized.
+                    let policies = args
+                        .capability_policy
+                        .as_deref()
+                        .map(load_capability_policy)
+                        .transpose()
+                        .and_then(|capability| {
+                            args.data_flow_policy
+                                .as_deref()
+                                .map(load_data_flow_policy)
+                                .transpose()
+                                .map(|data_flow| (capability, data_flow))
+                        });
+                    match policies {
+                        Ok((capability, data_flow)) => {
+                            let registry = install_workflow_policy_state(
+                                registry,
+                                capability.as_ref(),
+                                data_flow.as_ref(),
+                            );
+                            let mut diagnostics = flow::diagnostics::analyze_source_at(
+                                &source,
+                                Some(&args.file),
+                                &registry,
+                            );
+                            if args.resolve {
+                                diagnostics.extend(
+                                    flow::diagnostics::resolve_executable_diagnostics(
+                                        &source,
+                                        Some(&args.file),
+                                        &registry,
+                                    ),
+                                );
+                            }
+                            (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
+                        }
+                        Err(_) => (Vec::new(), None),
+                    }
+                }
+                // Diagnostics are best effort. Keep the authoritative load at
+                // its existing point so catalog errors retain their ordering.
+                Err(_) => (Vec::new(), None),
+            }
+        }
+        _ => (Vec::new(), None),
+    }
+}
+
+/// `check --fix`: applies the machine fixes of the check diagnostics for a few rounds and
+/// writes the file once, only when its text changed. A round is kept only when re-checking
+/// its text does not add diagnostics. The caller then runs the ordinary check on the result.
+fn apply_check_fixes(args: &Args) -> Result<()> {
+    const MAX_ROUNDS: usize = 3;
+    let original = fs::read_to_string(&args.file)
+        .with_context(|| format!("could not read workflow {}", args.file.display()))?;
+    let mut text = original.clone();
+    let mut diagnostics = static_check_diagnostics(args, Some(text.clone())).0;
+    let mut applied_total = 0;
+    for _ in 0..MAX_ROUNDS {
+        let applied = flow::diagnostics::apply_machine_fixes(&text, &diagnostics);
+        if applied.applied.is_empty() {
+            break;
+        }
+        let next = static_check_diagnostics(args, Some(applied.text.clone())).0;
+        if next.len() > diagnostics.len() {
+            break;
+        }
+        applied_total += applied.applied.len();
+        text = applied.text;
+        diagnostics = next;
+    }
+    if text != original {
+        write_file_atomically(&args.file, text.as_bytes())?;
+    }
+    eprintln!(
+        "applied {applied_total} machine fix(es) to {}",
+        args.file.display()
+    );
+    Ok(())
+}
+
+/// `execute grammar --format gbnf`: the statement grammar for GBNF-driven decoders.
+fn grammar_cli(arguments: &[String]) -> Result<()> {
+    match arguments {
+        [flag, format] if flag == "--format" && format == "gbnf" => {
+            io::stdout().write_all(flow::parser::gbnf_grammar().as_bytes())?;
+            Ok(())
+        }
+        [flag, format] if flag == "--format" => {
+            bail!("grammar --format accepts only gbnf, not {format:?}")
+        }
+        _ => bail!("usage: execute grammar --format gbnf"),
+    }
 }
 
 fn is_help_subcommand(name: &str) -> bool {
@@ -1806,6 +1877,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             "service"
         };
         flow::security::install_panic_hook(host, Some(&program.steps));
+    } else if args.command == "run"
+        && !FORWARDED_RUN_CHILD.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        // A finite run is a host too: a panic restores the terminal and writes one record.
+        // A forwarded run keeps the "daemon-run" hook that execute_forwarded installed.
+        flow::security::install_panic_hook("run", Some(&program.steps));
     }
     // A script's own `--help` (from a shebang line) shows its accept declarations.
     // Literal arguments keep `--help` as a value for positional programs; a program with
@@ -3174,7 +3251,6 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(feature = "tooling", feature = "module-tools"))]
 fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::ErrorKind;
@@ -3777,7 +3853,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
   --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 

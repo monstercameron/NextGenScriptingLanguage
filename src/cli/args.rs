@@ -30,6 +30,8 @@ pub(crate) struct Args {
     pub(crate) single_instance: Option<PathBuf>,
     pub(crate) github: bool,
     pub(crate) deny_warnings: bool,
+    /// `check --fix`: apply the machine fixes of the check diagnostics and write the file.
+    pub(crate) fix: bool,
     pub(crate) command: &'static str,
     pub(crate) file: PathBuf,
     pub(crate) manifest_dir: Option<PathBuf>,

@@ -3339,7 +3339,7 @@ fn checkpoint_temporary_name(name: &std::ffi::OsStr, blob_folder: bool) -> bool 
         && if blob_folder {
             stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit())
         } else {
-            stem == "journal" || stem == COMPLETED_LOG
+            stem == "journal" || stem == COMPLETED_LOG || stem == resolutions::RESOLUTIONS_LOG
         }
 }
 
@@ -5511,5 +5511,35 @@ mod output_marker_tests {
             Journal::open_with_inputs(&options, &cwd, "service:trigger-hash", 1024, None).unwrap();
         assert!(journal.is_finished());
         assert!(!journal.emitted_matches(b"handled\n"));
+    }
+}
+
+#[cfg(test)]
+mod temporary_name_tests {
+    use super::checkpoint_temporary_name;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn resolutions_rewrite_temporaries_are_recognised() {
+        // `consume_retry_resolution` rewrites resolutions.jsonl through the atomic writer;
+        // a crash must leave a file the sweep recognises, not one that blocks recovery.
+        for name in [
+            ".journal-41-7.tmp",
+            ".completed.jsonl-41-7.tmp",
+            ".resolutions.jsonl-41-7.tmp",
+        ] {
+            assert!(checkpoint_temporary_name(OsStr::new(name), false), "{name}");
+        }
+        for name in [
+            ".resolutions.jsonl-41.tmp",
+            ".resolutions.jsonl-x-7.tmp",
+            ".other.jsonl-41-7.tmp",
+            "resolutions.jsonl",
+        ] {
+            assert!(
+                !checkpoint_temporary_name(OsStr::new(name), false),
+                "{name}"
+            );
+        }
     }
 }

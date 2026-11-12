@@ -4514,6 +4514,29 @@ fn register_sensitive_group_failure(
     Ok(())
 }
 
+/// Scope a remote endpoint's manifest fixture loopback switch to the capability
+/// policy at connect time. Under an active policy the switch survives only when
+/// the policy explicitly lists the endpoint's origin, mirroring
+/// `authorize_network_endpoint`; the manifest flag alone never authorizes
+/// loopback there. Without a policy the manifest flag is unchanged. Returns the
+/// explicit-grant decision so the caller can pass it on as the SSRF grant.
+#[cfg(feature = "remote")]
+pub(crate) fn scope_remote_fixture_loopback(
+    registry: &Registry,
+    applet_name: &str,
+    config: &mut crate::contracts::RemoteEndpointConfig,
+) -> bool {
+    let explicitly_granted = crate::capabilities::remote_origin_is_explicitly_granted(
+        registry,
+        applet_name,
+        &config.endpoint,
+    );
+    if crate::capabilities::capability_policy_active(registry) && !explicitly_granted {
+        config.allow_loopback_http_fixture = false;
+    }
+    explicitly_granted
+}
+
 #[cfg(feature = "remote")]
 fn execute_remote_applet(
     site: CallSite<'_>,
@@ -4577,15 +4600,13 @@ fn execute_remote_applet(
             .min(u64::MAX as u128) as u64;
         client_config.timeout_ms = client_config.timeout_ms.min(remaining_ms);
     }
+    let explicit_grant =
+        scope_remote_fixture_loopback(registry, &manifest.name, &mut client_config);
     let client = RemoteClient::new_with_credential_base(client_config, credential_base)?
         .with_secret_redactor(crate::security::secret_redactor(registry))
         .with_resolver_helper(std::env::current_exe()?)
         .with_process_observer(signals.process_launch_callback())
-        .with_ssrf_grant(crate::capabilities::remote_origin_is_explicitly_granted(
-            registry,
-            &manifest.name,
-            &endpoint.endpoint,
-        ));
+        .with_ssrf_grant(explicit_grant);
     if let Some(path) = client.descriptor_cache_path() {
         crate::capabilities::authorize_applet_host_path(
             registry,
@@ -8290,5 +8311,83 @@ mod issue_696_cache_overlay_tests {
             key(issue_696_overlay(&[("CACHE_VARIANT", "red")], &[])),
             "an identical overlay must hit the module cache"
         );
+    }
+}
+
+#[cfg(all(test, feature = "remote"))]
+mod issue_925_connect_time_tests {
+    use super::*;
+    use crate::capabilities::{AppletGrant, CapabilityPolicy, FilesystemGrant};
+    use crate::contracts::RemoteEndpointConfig;
+
+    fn install_policy(registry: &Registry, origins: &[&str]) {
+        let grant = AppletGrant {
+            capabilities: BTreeSet::from(["network.connect".to_owned()]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant::default(),
+            network: true,
+            network_origins: origins.iter().map(|origin| (*origin).to_owned()).collect(),
+            sandbox_required: false,
+            resource_limits: None,
+        };
+        registry.set_host_state(Some(CapabilityPolicy {
+            host: None,
+            version: 1,
+            deny_privileged: false,
+            allow_wrappers: Default::default(),
+            host_environment: Default::default(),
+            applets: BTreeMap::from([("remote.fixture".to_owned(), grant)]),
+        }));
+    }
+
+    fn fixture_config() -> RemoteEndpointConfig {
+        let mut config = RemoteEndpointConfig::new("http://127.0.0.1:9");
+        config.allow_loopback_http_fixture = true;
+        config
+    }
+
+    #[test]
+    fn connect_time_loopback_switch_follows_the_policy_listing() {
+        let registry = Registry::default();
+
+        // No policy: the manifest flag is unchanged and there is no explicit grant.
+        let mut config = fixture_config();
+        assert!(!scope_remote_fixture_loopback(
+            &registry,
+            "remote.fixture",
+            &mut config
+        ));
+        assert!(config.allow_loopback_http_fixture);
+
+        // A broad empty-list policy never keeps the flag alive.
+        install_policy(&registry, &[]);
+        let mut config = fixture_config();
+        assert!(!scope_remote_fixture_loopback(
+            &registry,
+            "remote.fixture",
+            &mut config
+        ));
+        assert!(!config.allow_loopback_http_fixture);
+
+        // Only the listed origin keeps the flag and counts as explicitly granted.
+        install_policy(&registry, &["http://127.0.0.1:9"]);
+        let mut config = fixture_config();
+        assert!(scope_remote_fixture_loopback(
+            &registry,
+            "remote.fixture",
+            &mut config
+        ));
+        assert!(config.allow_loopback_http_fixture);
+
+        // A different loopback origin does not carry the grant over.
+        install_policy(&registry, &["http://127.0.0.1:10"]);
+        let mut config = fixture_config();
+        assert!(!scope_remote_fixture_loopback(
+            &registry,
+            "remote.fixture",
+            &mut config
+        ));
+        assert!(!config.allow_loopback_http_fixture);
     }
 }

@@ -527,7 +527,8 @@ journaled `fs.transaction`, [external program modules](docs/program-modules.md),
 [loops](docs/language.md#loops-current-source), `parallel for each`, named background
 jobs and temporary scopes. The Quickshell adapter starts one process per renderer node,
 and real Omarchy desktop acceptance is open. Platform contracts are in
-[windows.md](docs/windows.md).
+[windows.md](docs/windows.md). Support tiers by platform, and the Linux-only feature
+families, are in [platforms.md](docs/platforms.md).
 
 ## Build and verify
 

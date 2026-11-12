@@ -576,17 +576,22 @@ pub(super) fn strip_suffix(args: &Map<String, Value>, input: &[u8]) -> Result<Va
 /// Unicode default lowercase mapping. It is locale-independent, so Turkish
 /// dotted and dotless i are not special-cased.
 pub(super) fn lower(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    text_output(text_input(args, input)?.to_lowercase())
+    let text = text_input(args, input)?;
+    if text.is_ascii() {
+        text_output(crate::bytes::ascii_case_string(text, false))
+    } else {
+        text_output(text.to_lowercase())
+    }
 }
 
 /// Unicode default uppercase mapping. It is locale-independent.
-/// ASCII input uses the standard library bytewise fast path, which is
-/// identical to [`str::to_uppercase`] over the ASCII range; every non-ASCII
+/// ASCII input uses the shared byte-kernel case map, which is identical to
+/// [`str::to_uppercase`] over the ASCII range; every non-ASCII
 /// string keeps the Unicode mapping (including expanding mappings).
 pub(super) fn upper(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     if text.is_ascii() {
-        text_output(text.to_ascii_uppercase())
+        text_output(crate::bytes::ascii_case_string(text, true))
     } else {
         text_output(text.to_uppercase())
     }

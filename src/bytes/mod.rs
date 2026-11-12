@@ -9,6 +9,19 @@ pub(crate) fn count_newlines(input: &[u8]) -> usize {
     input.iter().filter(|&&byte| byte == b'\n').count()
 }
 
+/// Map the ASCII letters of `text` to one case, leaving every other character
+/// unchanged. The result equals the Unicode mapping whenever `text` is ASCII,
+/// and non-ASCII characters are copied through as they are.
+pub(crate) fn ascii_case_string(text: &str, upper: bool) -> String {
+    let mut out = text.to_owned();
+    if upper {
+        out.make_ascii_uppercase();
+    } else {
+        out.make_ascii_lowercase();
+    }
+    out
+}
+
 /// Find the first byte that belongs to `set`.
 pub(crate) fn find_any(input: &[u8], set: &[u8]) -> Option<usize> {
     match set {
@@ -205,6 +218,52 @@ mod tests {
                     reference_position(tail, |byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
                 );
             }
+        }
+    }
+
+    #[test]
+    fn ascii_case_matches_reference_at_all_offsets_and_lengths() {
+        // Every ASCII byte value appears; the backing buffer is ASCII so each
+        // offset is a character boundary.
+        for offset in 0..=63 {
+            for length in 0..=257 {
+                let backing: String = (0..length + offset)
+                    .map(|index| char::from((index % 128) as u8))
+                    .collect();
+                let input = &backing[offset..];
+                assert_eq!(ascii_case_string(input, true), input.to_uppercase());
+                assert_eq!(ascii_case_string(input, false), input.to_lowercase());
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_case_leaves_non_ascii_characters_unchanged() {
+        let pieces = ["é", "ß", "Σ", "İ", "日本語", "😀", "aZ", "\n", "Ω"];
+        for piece_count in 0..=24 {
+            let text: String = pieces.iter().copied().cycle().take(piece_count).collect();
+            let upper_reference: String = text
+                .chars()
+                .map(|character| {
+                    if character.is_ascii() {
+                        character.to_ascii_uppercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect();
+            let lower_reference: String = text
+                .chars()
+                .map(|character| {
+                    if character.is_ascii() {
+                        character.to_ascii_lowercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect();
+            assert_eq!(ascii_case_string(&text, true), upper_reference);
+            assert_eq!(ascii_case_string(&text, false), lower_reference);
         }
     }
 

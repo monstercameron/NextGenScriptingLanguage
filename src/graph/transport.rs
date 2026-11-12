@@ -2367,7 +2367,7 @@ impl RuntimeGraphExecutor {
             call,
             manifest,
             &self.registry,
-            &cwd,
+            cwd,
         )?;
         sensitivities.extend(&worker_history);
 

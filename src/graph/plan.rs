@@ -623,9 +623,21 @@ impl GraphPlan {
     /// The default run limits are applied first, before any per-node work, so `check`
     /// refuses a graph over `max_nodes` or `max_edges` the way `run` does (#167).
     /// Embedders that build a plan in code and admit it with larger
-    /// `GraphRunOptions` validate it with [`GraphPlan::validate`] instead.
+    /// `GraphRunOptions` call [`GraphPlan::validate_with_registry_and_limits`] instead.
     pub fn validate_with_registry(&self, registry: &Registry) -> Result<()> {
-        let limits = super::transport::GraphRunOptions::default();
+        self.validate_with_registry_and_limits(
+            registry,
+            &super::transport::GraphRunOptions::default(),
+        )
+    }
+
+    /// Validate like [`GraphPlan::validate_with_registry`], but admit the node and
+    /// edge counts against the supplied `limits` instead of the default run limits.
+    pub fn validate_with_registry_and_limits(
+        &self,
+        registry: &Registry,
+        limits: &super::transport::GraphRunOptions,
+    ) -> Result<()> {
         if self.nodes.len() > limits.max_nodes {
             bail!(
                 "graph node count {} exceeds max_nodes {}",

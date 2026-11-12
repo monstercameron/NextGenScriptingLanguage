@@ -5,7 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_latency import main, run_ratio_gate
+import sys
+
+# The tool sits beside this file; make the import work under unittest discovery as well.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from check_latency import main, run_ratio_gate  # noqa: E402
 
 
 def report(revision, rows):

@@ -118,3 +118,28 @@ fn record_with_checkpoint_runs_and_writes_a_record() {
         "{stderr}"
     );
 }
+
+/// env runs the program, so a policy header that denies its effects refuses it before the
+/// first step, exactly as `run` does.
+#[cfg(feature = "agent-advisory")]
+#[test]
+fn env_refuses_a_program_whose_policy_header_denies_its_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("p.program"),
+        "# execute-policy: allow none\nproduce json\nuse value \"x\"\nthen save to \"written.txt\"\n",
+    )
+    .unwrap();
+    let output = execute()
+        .current_dir(dir.path())
+        .args(["env", "p.program", "--format", "bash"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!dir.path().join("written.txt").exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("execute-policy header denies effects"),
+        "{stderr}"
+    );
+}

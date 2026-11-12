@@ -4414,6 +4414,9 @@ fn env_cli(arguments: &[String]) -> Result<()> {
             "env needs a program that declares `produce json` with a flat record of text values"
         ),
     }
+    // env runs the program, so the program's own policy header binds it exactly as it binds
+    // `run`: a header that denies an effect refuses the program before its first step.
+    enforce_policy_header(&source, &program, &registry, &path)?;
     let options = RunOptions::new(cwd);
     let result = runtime::run(&program, &registry, &options)
         .map_err(|error| redact_runtime_error(&registry, error))?;

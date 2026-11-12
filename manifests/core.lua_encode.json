@@ -1,0 +1,60 @@
+{
+  "name": "lua.encode",
+  "description": "Writes a JSON value as one Lua literal in the supported subset: nil, booleans, numbers, double-quoted strings, lists as { ... } and records as { [\"key\"] = ... }. Values outside the subset are refused with their path. Executes nothing and reads or writes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "value": {
+      "type": "json",
+      "required": true,
+      "description": "JSON value to write as a Lua literal."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "lua.encode"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "lua literal"
+  ]
+}

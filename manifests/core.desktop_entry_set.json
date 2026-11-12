@@ -1,0 +1,106 @@
+{
+  "name": "desktop.entry_set",
+  "description": "Sets one key of the Desktop Entry group in .desktop file text and returns changed and the resulting text. Only the named key's lines change; comments, other keys and their order are kept. Reads and writes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Full content of the .desktop file."
+    },
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "Key name to set, such as Name or Comment."
+    },
+    "value": {
+      "type": "string",
+      "required": true,
+      "description": "Unescaped value to store. Backslashes, newlines and control characters are escaped as the specification requires."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "desktop.entry_set"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "text"
+      ]
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "text"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "desktop entry edit"
+  ]
+}

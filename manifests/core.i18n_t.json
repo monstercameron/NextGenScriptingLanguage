@@ -1,0 +1,131 @@
+{
+  "name": "i18n.t",
+  "description": "Looks up one message by key in the <locale>.json catalogs under catalog_dir, following the fallback chain requested language, its base language, then en, then the key itself. Selects a plural form by count and fills {name} placeholders from values. Reads only catalog files; writes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "catalog_dir": {
+      "type": "path",
+      "required": true,
+      "description": "Directory of <locale>.json catalogs such as da.json or pt_BR.json. Only regular files there whose names are a locale tag plus .json are read."
+    },
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "Message id to look up. It is also the English text when no catalog translates it."
+    },
+    "language": {
+      "type": "string",
+      "description": "Optional locale tag such as da_DK, da or ru. Without it, only the en fallback is consulted."
+    },
+    "plural_key": {
+      "type": "string",
+      "description": "Plural message id, given together with count. Its English form is used for counts other than one when no catalog translates it."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Nonnegative count that selects the plural form, given together with plural_key."
+    },
+    "context": {
+      "type": "string",
+      "description": "Optional message context that separates identical ids, such as menu."
+    },
+    "values": {
+      "type": "record",
+      "fields": {},
+      "additional_properties": {
+        "type": "json"
+      },
+      "description": "Placeholder values by name. Each value is a string, number or boolean and is copied verbatim."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "i18n.t"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "catalog_dir": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "language": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "plural_key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "count": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "context": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "values": {
+          "schema": {
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "message catalog"
+  ]
+}

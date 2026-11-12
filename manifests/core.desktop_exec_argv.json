@@ -1,0 +1,88 @@
+{
+  "name": "desktop.exec_argv",
+  "description": "Parses an unescaped Desktop Entry Exec value into its argument vector and expands field codes: %f and %u take one file or URL, %F and %U take each item as its own argument. Icon, name and desktop-file codes expand to nothing. Reads and writes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "The Exec value after string unescaping, as desktop.entry_get returns it."
+    },
+    "files": {
+      "type": "list",
+      "items": "string",
+      "description": "Local file names for %f and %F."
+    },
+    "urls": {
+      "type": "list",
+      "items": "string",
+      "description": "URLs for %u and %U."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "desktop.exec_argv"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "files": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "urls": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "desktop exec arguments"
+  ]
+}

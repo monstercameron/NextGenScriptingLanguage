@@ -8,6 +8,7 @@ mod aggregation;
 mod arithmetic;
 mod config;
 mod csv;
+mod desktop_entry;
 mod ensure;
 mod env_file;
 mod executable_lookup;
@@ -15,12 +16,14 @@ mod file_test;
 mod filesystem;
 mod glob;
 mod hash;
+mod i18n;
 mod ini;
 // #357: nothing calls the encoder until the journald socket send (NEEDS) lands.
 #[allow(dead_code)]
 mod journal;
 mod jsonc;
 mod list;
+mod lua_config;
 mod path;
 mod redact;
 mod shared;
@@ -312,6 +315,12 @@ pub fn execute_with_context(
         "text.render" => template::render(args, cwd, context),
         "text.format" => template::format(args, context),
         "redact.text" => redact::text(args),
+        "i18n.t" => i18n::translate(args, cwd, context),
+        "desktop.entry_get" => desktop_entry::entry_get(args, context),
+        "desktop.entry_set" => desktop_entry::entry_set(args, context),
+        "desktop.exec_argv" => desktop_entry::exec_argv(args, context),
+        "lua.encode" => lua_config::encode(args, context),
+        "lua.decode" => lua_config::decode(args, context),
         "fs.ensure_file" => ensure::ensure_file(args, cwd, context),
         "fs.ensure_line" => ensure::ensure_line(args, cwd, context),
         "conf.set" => ensure::conf_set(args, cwd, context),
@@ -882,5 +891,376 @@ mod tests {
         )
         .is_err());
         assert!(!dir.path().join("x.conf").exists());
+    }
+
+    fn write_catalog(dir: &Path, name: &str, body: &str) {
+        fs::write(dir.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn i18n_t_uses_the_requested_language_then_english_then_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalogs = dir.path().join("catalogs");
+        fs::create_dir(&catalogs).unwrap();
+        write_catalog(
+            &catalogs,
+            "da.json",
+            r#"{"language":"da","messages":{"":{"Saved":"Gemt","Hello {name}":"Hej {name}","Blank":""},"menu":{"Saved":"Gem"}}}"#,
+        );
+        write_catalog(
+            &catalogs,
+            "en.json",
+            r#"{"language":"en","messages":{"":{"Saved":"Saved","Only english":"Only English"}}}"#,
+        );
+        let lookup = |arguments: Value| run("i18n.t", arguments, dir.path()).unwrap();
+        let base = json!({"catalog_dir": "catalogs", "language": "da"});
+        let with = |extra: Value| {
+            let mut map = base.as_object().cloned().unwrap();
+            map.extend(extra.as_object().cloned().unwrap());
+            Value::Object(map)
+        };
+        assert_eq!(lookup(with(json!({"key": "Saved"}))), json!("Gemt"));
+        assert_eq!(
+            lookup(with(json!({"key": "Saved", "context": "menu"}))),
+            json!("Gem")
+        );
+        assert_eq!(
+            lookup(with(json!({"key": "Only english"}))),
+            json!("Only English")
+        );
+        assert_eq!(
+            lookup(with(json!({"key": "Missing key"}))),
+            json!("Missing key")
+        );
+        assert_eq!(lookup(with(json!({"key": "Blank"}))), json!("Blank"));
+        assert_eq!(
+            lookup(with(
+                json!({"key": "Hello {name}", "values": {"name": "Ada"}})
+            )),
+            json!("Hej Ada")
+        );
+        assert_eq!(
+            lookup(json!({"catalog_dir": "catalogs", "key": "Saved", "language": "da_DK.UTF-8"})),
+            json!("Gemt")
+        );
+        assert_eq!(
+            lookup(json!({"catalog_dir": "catalogs", "key": "Saved"})),
+            json!("Saved")
+        );
+    }
+
+    #[test]
+    fn i18n_t_fills_scalar_values_verbatim_and_refuses_structured_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalogs = dir.path().join("catalogs");
+        fs::create_dir(&catalogs).unwrap();
+        write_catalog(
+            &catalogs,
+            "da.json",
+            r#"{"messages":{"":{"Level {n} {on}":"Niveau {n} {on}"}}}"#,
+        );
+        let text = run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Level {n} {on}", "language": "da",
+                   "values": {"n": 13.1, "on": true}}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(text, json!("Niveau 13.1 true"));
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "x", "values": {"n": {"a": 1}}}),
+            dir.path(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn i18n_t_selects_plural_forms_by_the_language_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalogs = dir.path().join("catalogs");
+        fs::create_dir(&catalogs).unwrap();
+        write_catalog(
+            &catalogs,
+            "en.json",
+            r#"{"messages":{"":{"{count} file":["{count} file","{count} files"]}}}"#,
+        );
+        write_catalog(
+            &catalogs,
+            "ru.json",
+            r#"{"language":"ru","plural_forms":"nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);","messages":{"":{"{count} file":["{count} файл","{count} файла","{count} файлов"]}}}"#,
+        );
+        let plural = |language: &str, count: u64| {
+            run(
+                "i18n.t",
+                json!({"catalog_dir": "catalogs", "key": "{count} file",
+                       "plural_key": "{count} files", "count": count,
+                       "language": language, "values": {"count": count}}),
+                dir.path(),
+            )
+            .unwrap()
+        };
+        assert_eq!(plural("en", 1), json!("1 file"));
+        assert_eq!(plural("en", 5), json!("5 files"));
+        assert_eq!(plural("ru", 21), json!("21 файл"));
+        assert_eq!(plural("ru", 22), json!("22 файла"));
+        assert_eq!(plural("ru", 11), json!("11 файлов"));
+        // No catalog translates the plural key, so the English source is used.
+        assert_eq!(
+            run(
+                "i18n.t",
+                json!({"catalog_dir": "catalogs", "key": "{count} box",
+                       "plural_key": "{count} boxes", "count": 3, "values": {"count": 3}}),
+                dir.path(),
+            )
+            .unwrap(),
+            json!("3 boxes")
+        );
+        // A plural entry needs a count.
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "{count} file", "language": "ru",
+                   "values": {"count": 2}}),
+            dir.path(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn i18n_t_reads_only_locale_named_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalogs = dir.path().join("catalogs");
+        fs::create_dir(&catalogs).unwrap();
+        write_catalog(
+            &catalogs,
+            "da.json",
+            r#"{"messages":{"":{"Saved":"Gemt"}}}"#,
+        );
+        // Not catalogs: a broken JSON file whose name is not a locale tag, a text
+        // file, and a directory named like a catalog.
+        write_catalog(&catalogs, "broken.json", "{ not json");
+        write_catalog(&catalogs, "notes.txt", "{ not json");
+        fs::create_dir(catalogs.join("de.json")).unwrap();
+        let text = run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Saved", "language": "de"}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(text, json!("Saved"));
+        assert_eq!(
+            run(
+                "i18n.t",
+                json!({"catalog_dir": "catalogs", "key": "Saved", "language": "da"}),
+                dir.path(),
+            )
+            .unwrap(),
+            json!("Gemt")
+        );
+    }
+
+    #[test]
+    fn i18n_t_reports_bad_catalogs_and_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalogs = dir.path().join("catalogs");
+        fs::create_dir(&catalogs).unwrap();
+        write_catalog(&catalogs, "da.json", "{ not json");
+        let broken = run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Saved", "language": "da"}),
+            dir.path(),
+        )
+        .unwrap_err();
+        assert_eq!(broken.code, "invalid_catalog");
+        assert!(broken.message.contains("da.json"), "{broken}");
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "missing", "key": "Saved"}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Saved", "plural_key": "Saved"}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Saved", "count": 2}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(run(
+            "i18n.t",
+            json!({"catalog_dir": "catalogs", "key": "Saved", "count": -1, "plural_key": "x"}),
+            dir.path(),
+        )
+        .is_err());
+    }
+
+    const DESKTOP: &str = "[Desktop Entry]\nName=Editor\nName[da]=Redigering\nName[de_DE]=Editor DE\nExec=\"/opt/My Apps/edit\" --line=%f %U\n";
+
+    #[test]
+    fn desktop_entry_get_prefers_the_localized_key_then_the_plain_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let get = |arguments: Value| run("desktop.entry_get", arguments, dir.path()).unwrap();
+        assert_eq!(
+            get(json!({"text": DESKTOP, "key": "Name"})),
+            json!("Editor")
+        );
+        assert_eq!(
+            get(json!({"text": DESKTOP, "key": "Name", "locale": "da_DK.UTF-8"})),
+            json!("Redigering")
+        );
+        assert_eq!(
+            get(json!({"text": DESKTOP, "key": "Name", "locale": "de_DE"})),
+            json!("Editor DE")
+        );
+        assert_eq!(
+            get(json!({"text": DESKTOP, "key": "Name", "locale": "fr_FR"})),
+            json!("Editor")
+        );
+        assert_eq!(get(json!({"text": DESKTOP, "key": "Comment"})), json!(null));
+        assert_eq!(
+            get(json!({"text": DESKTOP, "key": "Exec", "group": "Desktop Entry"})),
+            json!("\"/opt/My Apps/edit\" --line=%f %U")
+        );
+    }
+
+    #[test]
+    fn desktop_entry_get_refuses_other_groups_and_malformed_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let refused = |arguments: Value| run("desktop.entry_get", arguments, dir.path()).is_err();
+        assert!(refused(
+            json!({"text": DESKTOP, "key": "Name", "group": "Desktop Action x"})
+        ));
+        assert!(refused(
+            json!({"text": DESKTOP, "key": "Name[de]", "locale": "da"})
+        ));
+        assert!(refused(json!({"text": DESKTOP, "key": "bad key"})));
+        assert!(refused(json!({"text": "Name=x\n", "key": "Name"})));
+    }
+
+    #[test]
+    fn desktop_entry_set_changes_only_the_named_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = "# keep me\n[Desktop Entry]\nName=Editor\nIcon=edit\n";
+        let set = |text: &str, key: &str, value: &str| {
+            run(
+                "desktop.entry_set",
+                json!({"text": text, "key": key, "value": value}),
+                dir.path(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            set(original, "Name", "Writer"),
+            json!({"changed": true, "text": "# keep me\n[Desktop Entry]\nName=Writer\nIcon=edit\n"})
+        );
+        assert_eq!(
+            set(original, "Name", "Editor"),
+            json!({"changed": false, "text": original})
+        );
+        assert_eq!(
+            set(original, "Comment", "Edit files"),
+            json!({"changed": true, "text": "# keep me\n[Desktop Entry]\nName=Editor\nIcon=edit\nComment=Edit files\n"})
+        );
+        assert!(run(
+            "desktop.entry_set",
+            json!({"text": original, "key": "bad key", "value": "x"}),
+            dir.path(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn desktop_exec_argv_expands_field_codes_one_argument_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = run(
+            "desktop.exec_argv",
+            json!({
+                "text": "\"/opt/My Apps/edit\" --line=%f %U",
+                "files": ["a b.txt"],
+                "urls": ["https://example.com/x"],
+            }),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            json!([
+                "/opt/My Apps/edit",
+                "--line=a b.txt",
+                "https://example.com/x"
+            ])
+        );
+        assert_eq!(
+            run(
+                "desktop.exec_argv",
+                json!({"text": "tool 100%%"}),
+                dir.path()
+            )
+            .unwrap(),
+            json!(["tool", "100%"])
+        );
+        assert!(run(
+            "desktop.exec_argv",
+            json!({"text": "tool %f", "files": ["a", "b"]}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(run(
+            "desktop.exec_argv",
+            json!({"text": "tool \"unterminated"}),
+            dir.path(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn lua_encode_and_decode_round_trip_a_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let value = json!({
+            "name": "demo",
+            "port": 8080,
+            "enabled": true,
+            "ratio": 1.5,
+            "hosts": ["a", "b\n\"c\""],
+        });
+        let text = run("lua.encode", json!({"value": value.clone()}), dir.path()).unwrap();
+        let source = text.as_str().unwrap().to_string();
+        assert_eq!(
+            run("lua.decode", json!({"text": source}), dir.path()).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn lua_decode_reads_the_subset_and_refuses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run(
+                "lua.decode",
+                json!({"text": "{ port = 8080, [\"mode\"] = \"tile\" }"}),
+                dir.path(),
+            )
+            .unwrap(),
+            json!({"port": 8080, "mode": "tile"})
+        );
+        assert!(run("lua.decode", json!({"text": "os.execute('x')"}), dir.path()).is_err());
+        assert!(run("lua.decode", json!({"text": "{ 1, x = 2 }"}), dir.path()).is_err());
+        assert!(run("lua.decode", json!({"text": "[[long]]"}), dir.path()).is_err());
+    }
+
+    #[test]
+    fn lua_encode_refuses_a_missing_value_and_excessive_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run("lua.encode", json!({}), dir.path()).is_err());
+        let mut deep = json!(1);
+        for _ in 0..200 {
+            deep = json!([deep]);
+        }
+        assert!(run("lua.encode", json!({"value": deep}), dir.path()).is_err());
     }
 }

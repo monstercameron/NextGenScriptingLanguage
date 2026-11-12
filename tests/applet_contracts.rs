@@ -239,9 +239,16 @@ fn compact_signatures_and_ranked_search_keep_catalog_discovery_small_and_usable(
         "{}",
         String::from_utf8_lossy(&signatures.stderr)
     );
+    // The compact listing stays near 100 bytes per applet. The absolute bound was 20,000
+    // while the catalog had about 200 applets; it follows the catalog size now.
+    let applet_count = signatures
+        .stdout
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
     assert!(
-        signatures.stdout.len() < 20_000,
-        "{} bytes",
+        signatures.stdout.len() < applet_count * 100,
+        "{} bytes for {applet_count} applets",
         signatures.stdout.len()
     );
     let names = cli(cwd, &["applets", "list", "--names"]);

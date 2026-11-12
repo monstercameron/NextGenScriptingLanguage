@@ -1,0 +1,60 @@
+{
+  "name": "lua.decode",
+  "description": "Reads one Lua literal in the supported subset back into a JSON value: nil, booleans, numbers, strings, tables with positional entries as lists and keyed entries as records. Anything outside the subset is refused with its line and column. Executes nothing and reads or writes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Lua source holding one literal value in the supported subset."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "lua.decode"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "lua literal value"
+  ]
+}

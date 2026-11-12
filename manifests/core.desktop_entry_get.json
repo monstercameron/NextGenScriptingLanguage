@@ -1,0 +1,91 @@
+{
+  "name": "desktop.entry_get",
+  "description": "Reads one key of the Desktop Entry group from .desktop file text and returns its unescaped value, or null when the key is absent. With locale, tries the localized keys first. Reads and writes nothing; the caller supplies the file text.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Full content of the .desktop file."
+    },
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "Key name such as Name, Exec or Icon, without a locale suffix when locale is given."
+    },
+    "group": {
+      "type": "string",
+      "description": "Optional group name. Only Desktop Entry is read; any other value is refused."
+    },
+    "locale": {
+      "type": "string",
+      "description": "Optional locale such as da_DK.UTF-8. Tries Key[da_DK], then Key[da], then the plain key."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "desktop.entry_get"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "group": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "locale": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "desktop entry value"
+  ]
+}

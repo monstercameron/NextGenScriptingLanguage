@@ -1,9 +1,10 @@
 # Top ten CPU processes
 
-From the project directory:
+From the project directory, build the current executable once:
 
 ```sh
-bin/execute examples/top-cpu.program
+cargo build --locked --release
+target/release/execute examples/top-cpu.program
 ```
 
 The app shows ten horizontal bars labelled with PID and executable name, with
@@ -62,9 +63,9 @@ sample clears the previous validation diagnostic.
 For one sample with JSON state and a rendered 100×30 frame:
 
 ```sh
-bin/execute examples/top-cpu.program --headless
-bin/execute check examples/top-cpu.program
-bin/execute explain examples/top-cpu.program
+target/release/execute examples/top-cpu.program --headless
+target/release/execute check examples/top-cpu.program
+target/release/execute explain examples/top-cpu.program
 ```
 
 The app only reads process data; it does not signal or change other processes.

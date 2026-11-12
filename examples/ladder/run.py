@@ -195,7 +195,7 @@ def validate_case(case, program_dir):
 
 
 def load_catalog(path=HERE / 'catalog.json', program_dir=HERE, numbers=None):
-    catalog = json.loads(path.read_text())
+    catalog = json.loads(path.read_text(encoding='utf-8'))
     cases = catalog['cases']
     wanted = list(range(1, TOTAL + 1)) if numbers is None else list(numbers)
     if [case['number'] for case in cases] != wanted:
@@ -520,7 +520,7 @@ def prepare(cwd, case, program_dir=HERE):
         (metadata / 'sample-stdin.txt').write_bytes(case['stdin'].encode())
     contract = {k: case[k] for k in ['number', 'title', 'purpose', 'inputs', 'outputs', 'applets']}
     contract['parameters'] = case.get('parameters', {})
-    (metadata / 'contract.json').write_text(json.dumps(contract, indent=2, ensure_ascii=False) + '\n')
+    (metadata / 'contract.json').write_text(json.dumps(contract, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     expected_root = metadata / 'expected'
     expected_root.mkdir()
     (expected_root / 'stdout').write_bytes(expected_bytes(case))
@@ -544,12 +544,17 @@ def prepare(cwd, case, program_dir=HERE):
         details += 'This is a foreground service; Ctrl-C stops it. The catalog test uses bounded runner options.\n\n'
     for key in ['inputs', 'outputs']:
         details += key.capitalize() + ':\n\n' + ''.join(f'- `{name}`: {description}\n' for name, description in case[key].items()) + '\n'
-    (metadata / 'README.md').write_text(details)
+    (metadata / 'README.md').write_text(details, encoding='utf-8')
+
+
+def default_binary():
+    name = 'execute.exe' if sys.platform == 'win32' else 'execute'
+    return PROJECT / 'target' / 'release' / name
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=PROJECT / 'bin/execute')
+    parser.add_argument('--binary', type=Path, default=None, help='Executable to test; defaults to target/release/execute (build with cargo build --locked --release)')
     parser.add_argument('--case', type=int, action='append', help='Run only these IDs (1..150); repeatable')
     parser.add_argument('--category', help='Run one category')
     parser.add_argument('--report', type=Path)
@@ -557,6 +562,8 @@ def main():
     parser.add_argument('--check-catalog', action='store_true')
     parser.add_argument('--prepare', type=Path, help='Export one selected utility with editable input fixtures')
     args = parser.parse_args()
+    if args.binary is None:
+        args.binary = default_binary()
     try:
         cases = load_catalog()
         if args.case and any(number not in range(1, TOTAL + 1) for number in args.case):
@@ -576,6 +583,8 @@ def main():
             prepare(args.prepare.resolve(), selected[0])
             print(f'Prepared {selected[0]["file"]} in {args.prepare.resolve()}; see .utility/README.md')
             return 0
+        if not args.binary.is_file():
+            parser.error(f'executable not found: {args.binary}; run "cargo build --locked --release" first, or pass --binary PATH to a current build')
         results = []
         for case in selected:
             item = {k: case[k] for k in ['number', 'file', 'title', 'category']}

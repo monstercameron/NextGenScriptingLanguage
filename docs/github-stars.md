@@ -1,9 +1,11 @@
 # A single-file GitHub star tracker
 
-From this project directory, with GitHub CLI installed and authenticated:
+From this project directory, with GitHub CLI installed and authenticated, build
+the current executable once:
 
 ```sh
-bin/execute examples/github-stars.program
+cargo build --locked --release
+target/release/execute examples/github-stars.program
 ```
 
 The default repository is `morluto/rea` (Reverse Engineer Anything). Type any
@@ -50,9 +52,9 @@ For a single live query and a machine-readable snapshot, including a 100×30
 rendered frame:
 
 ```sh
-bin/execute examples/github-stars.program --headless
-bin/execute check examples/github-stars.program
-bin/execute explain examples/github-stars.program
+target/release/execute examples/github-stars.program --headless
+target/release/execute check examples/github-stars.program
+target/release/execute explain examples/github-stars.program
 ```
 
 `check` and `explain` launch no commands. Interactive `--max-runs N` exits after

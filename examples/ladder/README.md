@@ -8,13 +8,21 @@ They are not counted among the 150 successful utilities.
 
 ## Find and run a utility
 
-From the project folder:
+From the project folder, build the current executable first (`--list` needs no
+build):
 
 ```sh
+cargo build --locked --release
 python3 examples/ladder/run.py --list
 python3 examples/ladder/run.py --case 76
 python3 examples/ladder/run.py --report examples/ladder/results-macos-arm64.json
 ```
+
+The runner tests `target/release/execute` (`execute.exe` on Windows) by default.
+If that file is missing it stops with a message asking for the build. To test
+another current build, pass it explicitly, for example
+`--binary path/to/execute`. The repository `bin/execute` is a historical 0.8.0
+artifact and is not used.
 
 The runner creates a fresh temporary workspace for every utility and alternate
 input. It checks the actual `.program` with `execute check`/`explain`, executes it,
@@ -277,7 +285,7 @@ are from macOS; Linux runtime execution requires its CI host.
 ## Regression coverage retained from the original ladder
 
 ```sh
-python3 tests/fixtures/legacy-ladder/run.py --binary bin/execute
+python3 tests/fixtures/legacy-ladder/run.py --binary target/release/execute
 python3 tests/utility_catalog.py
 ```
 

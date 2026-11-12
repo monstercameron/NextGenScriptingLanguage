@@ -396,6 +396,22 @@ one in full.
 See "Review a plan before it runs" and "Attach to a live program" in
 [the language reference](language.md).
 
+## Machine-readable grammar (GBNF)
+
+`flow::parser::gbnf_grammar()` returns a GBNF grammar (the llama.cpp grammar format
+for constrained decoding). It is built from `flow::parser::GRAMMAR_FORMS`, one table
+row per statement form. `tests/lane_a_grammar_doc.rs` checks that each row's example
+parses and appears in this document, so the table and this index cannot disagree
+about the forms they cover.
+
+The generated grammar covers only the forms in that table: `accept` declarations,
+`run` (direct and applet targets), `then`, `pipe to`, `use value` and `use folder`,
+each on one unindented line. It does not yet encode indented blocks, `take`,
+suffixes other than `as NAME`, declaration options, or context rules such as "`then`
+needs a preceding step". It is therefore looser than the parser in those places. The
+applet name form (`text.trim_final_lf`) allows dots, which the NAME notation above
+does not show.
+
 ## Reading the examples
 
 The examples use `"` for text, and each example is one complete program. The test

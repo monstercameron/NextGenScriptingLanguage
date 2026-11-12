@@ -111,6 +111,28 @@ fn applets_reject_and_discard_stderr_at_check_time() {
 }
 
 #[test]
+fn every_grammar_form_example_parses_and_is_in_the_doc() {
+    // The generated GBNF is built from flow::parser::GRAMMAR_FORMS. Each form's example
+    // must parse, and must appear verbatim in the prose index, so the table and the doc
+    // cannot describe different forms.
+    let text = grammar();
+    for form in flow::parser::GRAMMAR_FORMS {
+        assert!(
+            text.contains(form.example),
+            "docs/grammar.md does not contain the example for `{}`:\n{}",
+            form.rule,
+            form.example
+        );
+        if let Err(error) = flow::parser::parse(form.example) {
+            panic!(
+                "the parser rejects the example for `{}`: {error:#}",
+                form.rule
+            );
+        }
+    }
+}
+
+#[test]
 fn the_extractor_finds_each_fence_once() {
     let sample = "text\n```program\nrun \"true\"\n```\n```text\nnot a program\n```\n";
     let examples = program_examples(sample);

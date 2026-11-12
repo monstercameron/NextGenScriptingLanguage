@@ -3874,6 +3874,99 @@ fn token_text(token: &Token<'_>) -> String {
     }
 }
 
+/// One statement form in the machine-readable grammar. `rule` names the production,
+/// `body` is its right-hand side in GBNF syntax (terminal rules come from
+/// `gbnf_grammar`), and `example` is program text that uses the form. Each example
+/// must parse and appear verbatim in docs/grammar.md, which the grammar tests check.
+#[derive(Debug, Clone, Copy)]
+pub struct GrammarForm {
+    pub rule: &'static str,
+    pub body: &'static str,
+    pub example: &'static str,
+}
+
+/// The single table of statement forms behind `gbnf_grammar`. Only forms that
+/// are one logical line and unindented are listed here; blocks, declarations
+/// with options, and the other forms in docs/grammar.md are not yet encoded.
+pub const GRAMMAR_FORMS: &[GrammarForm] = &[
+    GrammarForm {
+        rule: "accept-decl",
+        body: r#""accept " name " as " type-name"#,
+        example: r#"accept name as text
+"#,
+    },
+    GrammarForm {
+        rule: "run-direct",
+        body: r#""run " text (" with " argument (" and " argument)*)? (" as " name)?"#,
+        example: r#"run "printf" with arguments ["count"] as label
+"#,
+    },
+    GrammarForm {
+        rule: "run-applet",
+        body: r#""run " applet (" with " argument (" and " argument)*)? (" as " name)?"#,
+        example: r#"accept text as text
+run text.trim_final_lf with text text as trimmed
+"#,
+    },
+    GrammarForm {
+        rule: "then-stmt",
+        body: r#""then " target (" with " argument (" and " argument)*)? (" as " name)?"#,
+        example: r#"run "printf" with arguments ["a\nb\n"]
+then "wc" with arguments ["-l"]
+"#,
+    },
+    GrammarForm {
+        rule: "pipe-stmt",
+        body: r#""pipe to " target (" with " argument (" and " argument)*)? (" as " name)?"#,
+        example: r#"run "printf" with arguments ["a\nb\n"]
+pipe to "wc" with arguments ["-l"]
+"#,
+    },
+    GrammarForm {
+        rule: "use-value",
+        body: r#""use value " value (" as " name)?"#,
+        example: r#"use value "hello"
+then tr with from "[:lower:]" and to "[:upper:]"
+"#,
+    },
+    GrammarForm {
+        rule: "use-folder",
+        body: r#""use folder " value"#,
+        example: r#"use folder "work"
+run pwd
+"#,
+    },
+];
+
+/// Terminal and shared rules of the generated GBNF, following the notation in
+/// docs/grammar.md. Lists take no nested lists and no line breaks.
+const GBNF_TERMINALS: &str = r#"root ::= statement ("\n" statement)* "\n"
+text ::= "\"" ([^"\\\n] | "\\" [^\n])* "\""
+integer ::= "-"? [0-9]+
+boolean ::= "true" | "false"
+name ::= [A-Za-z_] [A-Za-z0-9_]*
+applet ::= name ("." name)*
+target ::= text | applet
+type-name ::= "text" | "integer" | "boolean" | "list of text" | "json"
+item ::= text | integer | boolean | name
+list ::= "[" " "? (item (" "? "," " "? item)*)? "]"
+value ::= text | integer | boolean | name | list
+argument ::= "arguments " list | "flags " list | name " " value
+"#;
+
+/// GBNF (llama.cpp grammar format) for the statement forms in `GRAMMAR_FORMS`.
+/// The `statement` rule is the alternation of every form rule, so the generated
+/// text cannot list a form the table does not have.
+pub fn gbnf_grammar() -> String {
+    let forms: Vec<&str> = GRAMMAR_FORMS.iter().map(|form| form.rule).collect();
+    let mut grammar = format!("statement ::= {}\n", forms.join(" | "));
+    grammar.push_str(GBNF_TERMINALS);
+    for form in GRAMMAR_FORMS {
+        grammar.push_str(&format!("{} ::= {}\n", form.rule, form.body));
+    }
+    grammar
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

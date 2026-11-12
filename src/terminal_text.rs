@@ -83,6 +83,70 @@ pub fn encode_pipeline_for_stdout(bytes: &[u8], stdout_is_terminal: bool) -> Vec
     escape_controls(&String::from_utf8_lossy(bytes)).into_bytes()
 }
 
+/// Incremental form of [`encode_pipeline_for_stdout`] for a TTY sink that receives its bytes in
+/// chunks as a child writes them. Feeding every chunk through [`push`](Self::push) and then
+/// calling [`finish`](Self::finish) yields exactly the bytes the one-shot encoding produces for
+/// the concatenated input, wherever the chunk boundaries fall.
+///
+/// Escaping is per character, so the only state carried between chunks is an incomplete UTF-8
+/// sequence at the end of a chunk, at most three bytes. An escape sequence split across chunks
+/// needs no state: its ESC or C1 character is escaped on its own and the rest of the sequence
+/// passes through as text, the same as in the one-shot path.
+#[derive(Debug, Default)]
+pub struct TerminalEscaper {
+    pending: Vec<u8>,
+}
+
+impl TerminalEscaper {
+    /// Escape the complete characters in `chunk` into `out`, keeping an incomplete trailing
+    /// sequence for the next chunk.
+    pub fn push(&mut self, chunk: &[u8], out: &mut Vec<u8>) {
+        if self.pending.is_empty() {
+            let rest = escape_utf8_prefix(chunk, out);
+            self.pending.extend_from_slice(rest);
+        } else {
+            self.pending.extend_from_slice(chunk);
+            let joined = std::mem::take(&mut self.pending);
+            let rest = escape_utf8_prefix(&joined, out);
+            self.pending.extend_from_slice(rest);
+        }
+    }
+
+    /// End the stream. An incomplete sequence left at end of input renders as one U+FFFD, as
+    /// [`String::from_utf8_lossy`] renders it.
+    pub fn finish(&mut self, out: &mut Vec<u8>) {
+        if !self.pending.is_empty() {
+            out.extend_from_slice("\u{fffd}".as_bytes());
+            self.pending.clear();
+        }
+    }
+}
+
+/// Escape the complete characters of `bytes` into `out`, replacing invalid sequences with
+/// U+FFFD exactly as [`String::from_utf8_lossy`] does. Returns the incomplete sequence at the
+/// end of `bytes`, if any, so the caller can prepend it to the next chunk.
+fn escape_utf8_prefix<'a>(mut bytes: &'a [u8], out: &mut Vec<u8>) -> &'a [u8] {
+    loop {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                out.extend_from_slice(escape_controls(text).as_bytes());
+                return &[];
+            }
+            Err(error) => {
+                let (valid, rest) = bytes.split_at(error.valid_up_to());
+                out.extend_from_slice(escape_controls(&String::from_utf8_lossy(valid)).as_bytes());
+                match error.error_len() {
+                    Some(invalid) => {
+                        out.extend_from_slice("\u{fffd}".as_bytes());
+                        bytes = rest.get(invalid..).unwrap_or(&[]);
+                    }
+                    None => return rest,
+                }
+            }
+        }
+    }
+}
+
 fn escape(text: &str, preserve_layout: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
@@ -326,5 +390,74 @@ mod tests {
             escape_controls("line\u{2028}next\u{2029}paragraph"),
             r"line\u{2028}next\u{2029}paragraph"
         );
+    }
+
+    fn streamed(chunks: &[&[u8]]) -> Vec<u8> {
+        let mut escaper = super::TerminalEscaper::default();
+        let mut out = Vec::new();
+        for chunk in chunks {
+            escaper.push(chunk, &mut out);
+        }
+        escaper.finish(&mut out);
+        out
+    }
+
+    #[test]
+    fn streamed_escaping_matches_one_shot_at_every_split_position() {
+        let inputs: [&[u8]; 5] = [
+            b"\x1b[31mred\x1b[0m",
+            "x\u{9b}31my".as_bytes(),
+            "a\u{1f600}b\u{202e}".as_bytes(),
+            b"ok\xf0\x9f\x98\x80\xff\xf0\x9f!z\xe2\x82",
+            "line\nnext\tcol \u{6f22}\u{5b57} \u{fffd}".as_bytes(),
+        ];
+        for input in inputs {
+            let expected = super::encode_pipeline_for_stdout(input, true);
+            for split in 0..=input.len() {
+                let got = streamed(&[&input[..split], &input[split..]]);
+                assert_eq!(got, expected, "split at {split} of {input:?}");
+            }
+            let one_byte: Vec<&[u8]> = input.chunks(1).collect();
+            assert_eq!(
+                streamed(&one_byte),
+                expected,
+                "one byte per chunk of {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn streamed_escape_sequence_split_across_chunks_is_escaped_in_full() {
+        let mut escaper = super::TerminalEscaper::default();
+        let mut out = Vec::new();
+        escaper.push(b"\x1b[", &mut out);
+        escaper.push(b"3", &mut out);
+        escaper.push(b"1m", &mut out);
+        escaper.finish(&mut out);
+        assert_eq!(out, br"\u{1b}[31m");
+    }
+
+    #[test]
+    fn streamed_four_byte_character_waits_for_its_last_byte() {
+        let mut escaper = super::TerminalEscaper::default();
+        let mut out = Vec::new();
+        let character = "\u{1f600}".as_bytes();
+        for byte in &character[..3] {
+            escaper.push(std::slice::from_ref(byte), &mut out);
+            assert!(out.is_empty(), "emitted before the character completed");
+            assert!(escaper.pending.len() <= 3, "pending grew past one sequence");
+        }
+        escaper.push(&character[3..], &mut out);
+        escaper.finish(&mut out);
+        assert_eq!(out, character);
+    }
+
+    #[test]
+    fn streamed_incomplete_sequence_at_end_renders_one_replacement() {
+        let mut escaper = super::TerminalEscaper::default();
+        let mut out = Vec::new();
+        escaper.push(b"a\xf0\x9f", &mut out);
+        escaper.finish(&mut out);
+        assert_eq!(out, "a\u{fffd}".as_bytes());
     }
 }

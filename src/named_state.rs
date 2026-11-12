@@ -15,14 +15,21 @@
 //! access, so a name can never leave its kind directory.
 //!
 //! Mutating operations create missing parent directories, owner-only (0700) on
-//! Unix. Files are created owner-only (0600). Read-only operations never create
-//! anything.
+//! Unix. Files are created owner-only (0600). Reads never create directories or
+//! entries; a flag read may create the hidden lock file beside the flag.
+//!
+//! Every operation refuses a state path whose existing components include a
+//! symbolic link or, on Windows, a reparse point. Flag and debounce operations
+//! take an exclusive advisory lock on a sibling `.<name>~lock` file for their
+//! read-decide-write, so concurrent callers in other processes or threads are
+//! serialised.
 
-use std::fs::{self, DirBuilder, File};
+use std::fs::{self, DirBuilder, File, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::platform;
 
@@ -39,6 +46,11 @@ const DEBOUNCE_DIR: &str = "debounce";
 
 /// Largest debounce record accepted. A decimal millisecond count fits easily.
 const MAX_STAMP_BYTES: usize = 32;
+
+/// Longest a caller waits for another holder of an entry's lock.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+/// Pause between attempts to take a busy entry lock.
+const LOCK_POLL: Duration = Duration::from_millis(1);
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
@@ -106,10 +118,141 @@ pub fn validate_name(name: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Validate `name` and map it under `state_dir/<kind>/`.
+/// Whether `metadata` describes a symbolic link or, on Windows, a reparse point.
+fn is_link(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        platform::windows::is_reparse(metadata)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Probe one path component: `None` when it does not exist, otherwise whether
+/// it is a link.
+fn probe_link(path: &Path) -> io::Result<Option<bool>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(is_link(&metadata))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Walk `chain` in order and refuse the first component that `probe` reports as
+/// a link. A missing component ends the walk, since nothing below it can exist.
+/// The probe is a parameter so the walk can be tested without creating links.
+fn refuse_links<F>(chain: &[PathBuf], mut probe: F) -> io::Result<()>
+where
+    F: FnMut(&Path) -> io::Result<Option<bool>>,
+{
+    for component in chain {
+        match probe(component)? {
+            None => return Ok(()),
+            Some(false) => {}
+            Some(true) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "refusing state path {}: it is a symbolic link or reparse point",
+                        component.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate `name` and map it under `state_dir/<kind>/`. The path is refused
+/// when any existing directory from the state directory down to the entry's
+/// parent is a link. This runs before any read or write, so a planted link
+/// cannot redirect either. The entry itself is checked under its lock, by
+/// [`lock_entry`].
 fn entry_path(state_dir: &Path, kind: &str, name: &str) -> io::Result<PathBuf> {
     validate_name(name)?;
-    Ok(state_dir.join(kind).join(name))
+    let mut current = state_dir.join(kind);
+    let mut chain = vec![state_dir.to_path_buf(), current.clone()];
+    let mut segments = name.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        current.push(segment);
+        if segments.peek().is_some() {
+            chain.push(current.clone());
+        }
+    }
+    refuse_links(&chain, probe_link)?;
+    Ok(current)
+}
+
+/// An exclusive advisory lock on the sibling lock file of one entry. Dropping
+/// it releases the OS lock.
+struct EntryLock {
+    _file: File,
+}
+
+/// Take the exclusive lock for `path`, waiting up to [`LOCK_WAIT`], then refuse
+/// the entry if it is a link. The parent directory must exist.
+///
+/// Every access to an entry happens under its lock. On Windows a handle held by
+/// a probe that overlaps a removal leaves the name pending deletion, so a create
+/// of the same name then fails. Probing the entry only here, under the lock,
+/// keeps those handles from overlapping.
+///
+/// This uses the same primitive as the applets' path lock (`File::try_lock`,
+/// flock on Unix and LockFileEx on Windows). It does not call that helper,
+/// which lives in a private applets module, nor `agent::instance`'s named
+/// locks, whose lock directory must be owned by the user and not writable by
+/// others. Requiring that here would change what existing callers see.
+///
+/// The lock file is `.<name>~lock` beside the entry. `~` never appears in a
+/// validated name, so the lock cannot be mistaken for an entry. Like the
+/// temporary files, it is left in place, so every locker shares one inode.
+fn lock_entry(path: &Path) -> io::Result<EntryLock> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("state name has no file name"))?;
+    let lock_path = path.with_file_name(format!(".{file_name}~lock"));
+    refuse_links(std::slice::from_ref(&lock_path), probe_link)?;
+    let mut options = platform::private_options();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // No-follow so a link planted after the probe is refused, not opened.
+        // Nonblocking so a FIFO planted at the lock path cannot hang the open.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let file = options.open(&lock_path)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid(format!(
+            "lock path is not a regular file: {}",
+            lock_path.display()
+        )));
+    }
+    let started = Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => {
+                refuse_links(&[path.to_path_buf()], probe_link)?;
+                return Ok(EntryLock { _file: file });
+            }
+            Err(TryLockError::WouldBlock) if started.elapsed() < LOCK_WAIT => {
+                thread::sleep(LOCK_POLL);
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("timed out waiting for lock {}", lock_path.display()),
+                ));
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+    }
 }
 
 /// Create the parent directories of `path` with owner-only permissions.
@@ -182,41 +325,73 @@ fn write_and_publish(temp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
 pub fn flag_set(state_dir: &Path, name: &str) -> io::Result<()> {
     let path = entry_path(state_dir, FLAG_DIR, name)?;
     create_parents(&path)?;
+    let _lock = lock_entry(&path)?;
+    flag_create(&path)
+}
+
+/// Create the flag's file if it is absent. The caller holds the entry lock.
+fn flag_create(path: &Path) -> io::Result<()> {
     platform::private_options()
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&path)?;
+        .open(path)?;
     Ok(())
 }
 
-/// Clear a flag. Clearing an absent flag is not an error.
-pub fn flag_clear(state_dir: &Path, name: &str) -> io::Result<()> {
-    let path = entry_path(state_dir, FLAG_DIR, name)?;
-    match fs::remove_file(&path) {
+/// Remove the flag's file if it exists. The caller holds the entry lock.
+fn flag_remove(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
 }
 
-/// Whether the flag's file exists.
-pub fn flag_is_set(state_dir: &Path, name: &str) -> io::Result<bool> {
-    let path = entry_path(state_dir, FLAG_DIR, name)?;
-    match fs::symlink_metadata(&path) {
+/// Whether a flag's file exists at `path`.
+fn flag_present(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
 }
 
-/// Flip a flag and return its new state: `true` when it is now set.
+/// Clear a flag. Clearing an absent flag is not an error. When the flag's
+/// directory does not exist, the flag is absent, so nothing is created here.
+pub fn flag_clear(state_dir: &Path, name: &str) -> io::Result<()> {
+    let path = entry_path(state_dir, FLAG_DIR, name)?;
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Ok(());
+    }
+    let _lock = lock_entry(&path)?;
+    flag_remove(&path)
+}
+
+/// Whether the flag's file exists. The read takes the entry lock, so it cannot
+/// overlap a concurrent toggle. A missing directory means the flag is absent.
+pub fn flag_is_set(state_dir: &Path, name: &str) -> io::Result<bool> {
+    let path = entry_path(state_dir, FLAG_DIR, name)?;
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Ok(false);
+    }
+    let _lock = lock_entry(&path)?;
+    flag_present(&path)
+}
+
+/// Flip a flag and return its new state: `true` when it is now set. The read
+/// and the write happen under the entry lock, so concurrent toggles leave the
+/// flag in the state that the same number of serial toggles would, and each
+/// returned state matches some serial order.
 pub fn flag_toggle(state_dir: &Path, name: &str) -> io::Result<bool> {
-    if flag_is_set(state_dir, name)? {
-        flag_clear(state_dir, name)?;
+    let path = entry_path(state_dir, FLAG_DIR, name)?;
+    create_parents(&path)?;
+    let _lock = lock_entry(&path)?;
+    if flag_present(&path)? {
+        flag_remove(&path)?;
         Ok(false)
     } else {
-        flag_set(state_dir, name)?;
+        flag_create(&path)?;
         Ok(true)
     }
 }
@@ -271,17 +446,19 @@ fn read_stamp(path: &Path) -> io::Result<Option<u64>> {
 /// milliseconds.
 ///
 /// The caller supplies `now` (for example, the time since the Unix epoch), so
-/// tests are deterministic. This is a read-then-write without a lock: two
-/// concurrent callers can both see an expired window and both return `true`.
+/// tests are deterministic. The read, the decision and the write happen under
+/// the entry lock, so of any number of concurrent callers in one window, exactly
+/// one returns `true`.
 pub fn debounce(state_dir: &Path, name: &str, window: Duration, now: Duration) -> io::Result<bool> {
     let path = entry_path(state_dir, DEBOUNCE_DIR, name)?;
+    create_parents(&path)?;
+    let _lock = lock_entry(&path)?;
     let now_ms = millis(now);
     if let Some(last) = read_stamp(&path)? {
         if last <= now_ms && now_ms - last < millis(window) {
             return Ok(false);
         }
     }
-    create_parents(&path)?;
     replace_contents(&path, now_ms.to_string().as_bytes())?;
     Ok(true)
 }
@@ -523,5 +700,146 @@ mod tests {
             .mode();
         assert_eq!(dir_mode & 0o077, 0);
         assert_eq!(file_mode & 0o077, 0);
+    }
+
+    #[cfg(unix)]
+    fn assert_refused<T: std::fmt::Debug>(result: io::Result<T>) {
+        let error = result.expect_err("a state path through a link must be refused");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn concurrent_debounce_allows_exactly_one_in_a_window() {
+        use std::sync::{Arc, Barrier};
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().to_path_buf();
+        let callers = 50;
+        let barrier = Arc::new(Barrier::new(callers));
+        let handles: Vec<_> = (0..callers)
+            .map(|_| {
+                let state = state.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    debounce(&state, "press", at(250), at(1_000))
+                })
+            })
+            .collect();
+        let allowed = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap().unwrap())
+            .filter(|allowed| *allowed)
+            .count();
+        assert_eq!(allowed, 1);
+    }
+
+    #[test]
+    fn concurrent_toggles_match_a_serial_sequence() {
+        use std::sync::{Arc, Barrier};
+        for callers in [50_usize, 51] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = dir.path().to_path_buf();
+            let barrier = Arc::new(Barrier::new(callers));
+            let handles: Vec<_> = (0..callers)
+                .map(|_| {
+                    let state = state.clone();
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        flag_toggle(&state, "hypr/blur")
+                    })
+                })
+                .collect();
+            let results: Vec<bool> = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap().unwrap())
+                .collect();
+            // Serial toggles from a clear flag return set, clear, set, ... so
+            // the results hold ceil(n / 2) sets and the flag ends set when n is odd.
+            let sets = results.iter().filter(|set| **set).count();
+            assert_eq!(sets, callers.div_ceil(2), "{callers} toggles");
+            assert_eq!(
+                flag_is_set(&state, "hypr/blur").unwrap(),
+                callers % 2 == 1,
+                "{callers} toggles"
+            );
+        }
+    }
+
+    #[test]
+    fn link_walk_refuses_the_first_linked_component_and_stops_at_a_missing_one() {
+        let chain: Vec<PathBuf> = ["state", "state/flags", "state/flags/a", "state/flags/a/b"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let mut probed = 0;
+        let error = refuse_links(&chain, |path| {
+            probed += 1;
+            Ok(Some(path.ends_with("a")))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(probed, 3, "components below the link are never probed");
+
+        let mut probed = 0;
+        refuse_links(&chain, |_| {
+            probed += 1;
+            Ok(if probed == 2 { None } else { Some(false) })
+        })
+        .unwrap();
+        assert_eq!(probed, 2, "a missing component ends the walk");
+
+        refuse_links(&chain, |_| Ok(Some(false))).unwrap();
+    }
+
+    #[test]
+    fn probe_reports_missing_and_plain_directories_as_not_linked() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(probe_link(&dir.path().join("absent")).unwrap(), None);
+        assert_eq!(probe_link(dir.path()).unwrap(), Some(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_state_directory_is_refused_before_any_write() {
+        let base = tempfile::tempdir().unwrap();
+        let target = base.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let state = base.path().join("state");
+        std::os::unix::fs::symlink(&target, &state).unwrap();
+        assert_refused(flag_set(&state, "reboot-required"));
+        assert_refused(flag_clear(&state, "reboot-required"));
+        assert_refused(flag_is_set(&state, "reboot-required"));
+        assert_refused(flag_toggle(&state, "reboot-required"));
+        assert_refused(value_write(&state, "k", "v"));
+        assert_refused(value_read(&state, "k"));
+        assert_refused(debounce(&state, "d", at(250), at(0)));
+        assert!(
+            fs::read_dir(&target).unwrap().next().is_none(),
+            "nothing was written through the link"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_kind_directory_and_entry_are_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let state = base.path().join("state");
+        fs::create_dir(&state).unwrap();
+        let elsewhere = base.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, state.join("flags")).unwrap();
+        assert_refused(flag_set(&state, "a"));
+        assert_refused(flag_is_set(&state, "a"));
+        assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+
+        fs::remove_file(state.join("flags")).unwrap();
+        fs::create_dir_all(state.join("flags")).unwrap();
+        let victim = base.path().join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, state.join("flags").join("b")).unwrap();
+        assert_refused(flag_clear(&state, "b"));
+        assert_refused(flag_toggle(&state, "b"));
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
     }
 }

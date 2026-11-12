@@ -481,6 +481,52 @@ pub(super) fn check_native_abort(
     Ok(())
 }
 
+/// Longest wait for one native group iteration while a child is unreaped, so a terminal
+/// stop is noticed promptly (issue #524). Stops produce no descriptor event.
+#[cfg(unix)]
+const TERMINAL_STOP_POLL_MS: libc::c_int = 50;
+
+/// Fail the group when one of its unreaped commands stopped itself to read or write the
+/// terminal (issue #524). Such a command runs in a background process group, so the kernel
+/// stops it with SIGTTIN or SIGTTOU and it never exits. The stopped group is killed here,
+/// so the failure never waits on it. Jobs and parallel elements take the same path.
+#[cfg(unix)]
+pub(super) fn check_terminal_stops(
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &[Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> Result<()> {
+    let stopped = children.0.iter().enumerate().find_map(|(index, managed)| {
+        if managed.reaped {
+            return None;
+        }
+        terminal_stop_signal(managed.child.id()).map(|signal| (index, managed.child.id(), signal))
+    });
+    let Some((index, pid, signal)) = stopped else {
+        return Ok(());
+    };
+    kill_group(pid);
+    let (call, manifest, line) = calls[index];
+    let name = if signal == libc::SIGTTOU {
+        "SIGTTOU"
+    } else {
+        "SIGTTIN"
+    };
+    Err(native_execution_failure(
+        execution_result::ExecutionKind::TerminalInputRequired,
+        format!(
+            "line {line}: {} stopped by {name} because it reads the terminal; run it with `interactively` to give it the terminal, or pass its input without the terminal",
+            manifest.name_for(call)
+        ),
+        calls,
+        children,
+        observed,
+        signals,
+    )
+    .into())
+}
+
 /// Carry already-captured stdout on a timeout/cancel abort so a later
 /// `stdout to stderr` error-path re-emit can restore it. Without this the
 /// abort drops `output` and the failure loses `early-out` bytes. The wait
@@ -1034,6 +1080,8 @@ pub(super) fn execute_group_with_sink(
     loop {
         check_native_abort(calls, &children, &observed_stages, signals)
             .map_err(|error| attach_abort_stdout(error, &output))?;
+        check_terminal_stops(calls, &children, &observed_stages, signals)
+            .map_err(|error| attach_abort_stdout(error, &output))?;
         scan_child_statuses(
             &mut children,
             StatusScan {
@@ -1231,6 +1279,14 @@ pub(super) fn execute_group_with_sink(
             children.0.iter().any(|child| !child.reaped),
         );
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
+        // A child stopped for the terminal wakes nothing, so bound the wait while one is unreaped.
+        let timeout_ms = if children.0.iter().any(|child| !child.reaped)
+            && (timeout_ms < 0 || timeout_ms > TERMINAL_STOP_POLL_MS)
+        {
+            TERMINAL_STOP_POLL_MS
+        } else {
+            timeout_ms
+        };
         let observer_notified;
         let ready = if capture_diagnostics {
             let descriptors = &mut diagnostic_poll_descriptors;

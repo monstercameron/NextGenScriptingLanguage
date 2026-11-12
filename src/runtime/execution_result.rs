@@ -26,6 +26,9 @@ pub enum ExecutionKind {
     OutputLimit,
     CapacityError,
     ResourceExhaust,
+    /// A native command stopped itself to read the terminal (SIGTTIN or SIGTTOU)
+    /// without being the terminal's foreground process group (issue #524).
+    TerminalInputRequired,
     UnknownError,
 }
 
@@ -46,6 +49,7 @@ impl ExecutionKind {
             Self::OutputLimit => "output_limit",
             Self::CapacityError => "capacity_error",
             Self::ResourceExhaust => "resource_exhaust",
+            Self::TerminalInputRequired => "terminal_input_required",
             Self::UnknownError => "unknown_error",
         }
     }

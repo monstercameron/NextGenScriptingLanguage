@@ -138,6 +138,48 @@ fn exited_unreaped(pid: u32) -> std::io::Result<bool> {
     Ok(info.si_signo == libc::SIGCHLD)
 }
 
+/// The terminal signal (SIGTTIN or SIGTTOU) that stopped the unreaped child `pid`, if any
+/// (issue #524). A background process group that reads or writes its controlling terminal
+/// is stopped by the kernel and never exits, and a stop produces no pipe or pidfd event.
+/// `waitid` with WSTOPPED and WNOWAIT reports the stop without consuming it, then `waitpid`
+/// reads its signal. The child stays stopped until it is signalled, so the stop cannot
+/// turn into an exit between the two calls. A stop by any other signal is consumed here
+/// and reported as `None`.
+fn terminal_stop_signal(pid: u32) -> Option<libc::c_int> {
+    // SAFETY: siginfo_t is plain data, and all-zero is a valid bit pattern for it.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: waitid writes only into `info`, a live siginfo_t. WNOWAIT leaves the child
+    // unreaped, and WNOHANG makes the call return at once.
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WSTOPPED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    } != 0
+        || info.si_signo != libc::SIGCHLD
+        || info.si_code != libc::CLD_STOPPED
+    {
+        return None;
+    }
+    let mut status: libc::c_int = 0;
+    // SAFETY: waitpid writes only into `status`. The child is stopped and unreaped, so this
+    // reports its stop and cannot reap an exit; WNOHANG keeps the call from blocking.
+    let reported = unsafe {
+        libc::waitpid(
+            pid as libc::pid_t,
+            &mut status,
+            libc::WUNTRACED | libc::WNOHANG,
+        )
+    };
+    if reported != pid as libc::pid_t || !libc::WIFSTOPPED(status) {
+        return None;
+    }
+    let signal = libc::WSTOPSIG(status);
+    matches!(signal, libc::SIGTTIN | libc::SIGTTOU).then_some(signal)
+}
+
 /// Reap a child that has exited, signalling its process group first. The group signal
 /// happens while the leader is still a zombie, so its pid cannot be recycled in between.
 /// Returns Ok(None) while the child is still running.

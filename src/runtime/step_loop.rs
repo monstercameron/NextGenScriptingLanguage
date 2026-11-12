@@ -1213,6 +1213,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                             frame.line
                                         )
                                     })?;
+                                // Windows commands end their lines with CRLF; the value is
+                                // the text before both.
+                                if let Some(text) = bytes[..bytes.len() - 1].strip_suffix(b"\r") {
+                                    redactor
+                                        .register(text, &signals.cancelled, signals.deadline)
+                                        .map_err(|_| {
+                                            anyhow!(
+                                                "line {}: could not register sensitive program output",
+                                                frame.line
+                                            )
+                                        })?;
+                                }
                             }
                         }
                         bindings.insert(

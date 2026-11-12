@@ -22,14 +22,56 @@ pub(super) fn run(
 /// returns the milliseconds left until it on the applet clock. A deadline that
 /// has already passed yields zero, so a repeated wait after a resume ends at the
 /// original time instead of starting its full duration again.
-fn remaining_to_deadline(args: &Map<String, Value>) -> Result<Option<u64>, AppletError> {
+fn remaining_to_deadline(
+    args: &Map<String, Value>,
+    now_ms: impl FnOnce() -> Result<i64, AppletError>,
+) -> Result<Option<u64>, AppletError> {
     let Some(value) = args.get("deadline_ms") else {
         return Ok(None);
     };
     let deadline_ms = value.as_i64().ok_or_else(|| {
         invalid("args.deadline_ms must be an integer epoch millisecond timestamp")
     })?;
-    Ok(Some(remaining_until(deadline_ms, wall_clock_ms()?)))
+    Ok(Some(remaining_until(deadline_ms, now_ms()?)))
+}
+
+/// The delay `time.sleep` waits for, read from `now_ms` when an absolute deadline is given.
+fn sleep_delay_ms(
+    args: &Map<String, Value>,
+    now_ms: impl FnOnce() -> Result<i64, AppletError>,
+) -> Result<u64, AppletError> {
+    match remaining_to_deadline(args, now_ms)? {
+        Some(remaining) => {
+            if args.contains_key("milliseconds") || args.contains_key("seconds") {
+                return Err(invalid(
+                    "provide either deadline_ms or a milliseconds/seconds delay, not both",
+                ));
+            }
+            Ok(remaining)
+        }
+        None => duration_ms(args),
+    }
+}
+
+/// The timeout `wait.until` waits for, read from `now_ms` when an absolute deadline is given.
+fn wait_timeout_ms(
+    args: &Map<String, Value>,
+    now_ms: impl FnOnce() -> Result<i64, AppletError>,
+) -> Result<u64, AppletError> {
+    match remaining_to_deadline(args, now_ms)? {
+        Some(remaining) => {
+            if args.contains_key("timeout_ms") {
+                return Err(invalid(
+                    "provide either deadline_ms or timeout_ms, not both",
+                ));
+            }
+            Ok(remaining)
+        }
+        None => args
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("args.timeout_ms must be an integer")),
+    }
 }
 
 /// Milliseconds from `now_ms` until `deadline_ms`, or zero when it has passed.
@@ -73,17 +115,7 @@ fn duration_ms(args: &Map<String, Value>) -> Result<u64, AppletError> {
 }
 
 fn sleep(args: &Map<String, Value>, context: &ExecutionContext<'_>) -> Result<Value, AppletError> {
-    let ms = match remaining_to_deadline(args)? {
-        Some(remaining) => {
-            if args.contains_key("milliseconds") || args.contains_key("seconds") {
-                return Err(invalid(
-                    "provide either deadline_ms or a milliseconds/seconds delay, not both",
-                ));
-            }
-            remaining
-        }
-        None => duration_ms(args)?,
-    };
+    let ms = sleep_delay_ms(args, wall_clock_ms)?;
     if ms > MAX_WAIT_MS {
         return Err(invalid("sleep exceeds the 24-hour bound"));
     }
@@ -107,20 +139,7 @@ fn wait(
     cwd: &Path,
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
-    let timeout = match remaining_to_deadline(args)? {
-        Some(remaining) => {
-            if args.contains_key("timeout_ms") {
-                return Err(invalid(
-                    "provide either deadline_ms or timeout_ms, not both",
-                ));
-            }
-            remaining
-        }
-        None => args
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| invalid("args.timeout_ms must be an integer"))?,
-    };
+    let timeout = wait_timeout_ms(args, wall_clock_ms)?;
     let interval = optional_u64(args, "interval_ms", 50)?;
     if timeout > MAX_WAIT_MS || interval == 0 || interval > 10_000 {
         return Err(invalid(
@@ -264,6 +283,31 @@ mod tests {
         // Extreme values neither overflow nor panic.
         assert_eq!(remaining_until(i64::MIN, i64::MAX), 0);
         assert_eq!(remaining_until(i64::MAX, i64::MIN), i64::MAX as u64);
+    }
+    #[test]
+    fn resumed_waits_take_their_delay_from_the_absolute_deadline() {
+        // A 1 h wait with deadline 3_600_000 ms. It is killed at 10 min and resumed
+        // at 70 min, when the deadline has passed, so it proceeds at once.
+        let sleep_args = Map::from_iter([("deadline_ms".into(), Value::from(3_600_000))]);
+        assert_eq!(sleep_delay_ms(&sleep_args, || Ok(4_200_000)).unwrap(), 0);
+        // Resumed at 30 min, it waits the remaining 30 min.
+        assert_eq!(
+            sleep_delay_ms(&sleep_args, || Ok(1_800_000)).unwrap(),
+            1_800_000
+        );
+        let wait_args = Map::from_iter([
+            ("probe".into(), Value::String("file_exists".into())),
+            (
+                "path".into(),
+                Value::String("lane-v7-definitely-absent".into()),
+            ),
+            ("deadline_ms".into(), Value::from(3_600_000)),
+        ]);
+        assert_eq!(wait_timeout_ms(&wait_args, || Ok(4_200_000)).unwrap(), 0);
+        assert_eq!(
+            wait_timeout_ms(&wait_args, || Ok(1_800_000)).unwrap(),
+            1_800_000
+        );
     }
     #[test]
     fn sleep_to_a_past_deadline_returns_at_once() {

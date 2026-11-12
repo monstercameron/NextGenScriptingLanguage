@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 /// 2026-10-14T09:41:00Z: Wednesday, ISO week 42.
+#[cfg(feature = "records")]
 const PINNED: i64 = 1_791_970_860;
 const RENDERED: &str = "clock=2026-10-14T09:41:00Z";
 /// A different instant proving the pin wins: 2038-01-19T03:14:08Z.

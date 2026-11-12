@@ -1212,11 +1212,14 @@ fn apply_model_budget(
 }
 
 /// The largest saved what-if report `--confirm-report` will read.
+#[cfg(feature = "agent-advisory")]
 const MAX_CONFIRM_REPORT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Load a what-if report that the user saved for `--confirm-report`. A file that is too
 /// large, does not parse, or is not a what-if report is an error that names it.
+#[cfg(feature = "agent-advisory")]
 fn load_confirm_report(path: &Path) -> Result<serde_json::Value> {
+    use std::io::Read as _;
     let file = fs::File::open(path)
         .with_context(|| format!("could not open --confirm-report {}", path.display()))?;
     let mut bytes = Vec::new();

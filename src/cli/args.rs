@@ -27,6 +27,7 @@ pub(crate) struct Args {
     pub(crate) confirm: Option<String>,
     /// `run --confirm-report FILE`: a saved what-if report. When `--confirm` does not
     /// match, its plan is compared with the current one and the differences are printed.
+    #[cfg_attr(not(feature = "agent-advisory"), allow(dead_code))]
     pub(crate) confirm_report: Option<PathBuf>,
     /// `run|resume --model-fixtures DIR`: replay model calls from DIR. Wins over
     /// `EXECUTE_MODEL_FIXTURES`.

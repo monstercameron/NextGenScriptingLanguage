@@ -1,3 +1,4 @@
+#![cfg(feature = "tooling")]
 use flow::service_deployment::{render_for_workflow, ServiceFormat, WorkflowServiceRequest};
 use std::collections::BTreeMap;
 use std::fs;

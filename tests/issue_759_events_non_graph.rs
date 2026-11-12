@@ -3,6 +3,7 @@
 use std::{fs, process::Command};
 
 const FINITE: &str = "run printf with message \"started\"\nthen save to file \"started.txt\"\n";
+#[cfg(feature = "screens")]
 const SCREEN: &str = "open a screen \"Demo\"\n";
 const STREAM: &str = "stream from side.effect with marker \"launched.marker\"\nshow each line\n";
 

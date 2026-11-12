@@ -6,6 +6,7 @@
 //! The checker implements the keywords these schemas use: type, const, enum,
 //! required, properties, additionalProperties (false or a schema), items, minimum,
 //! oneOf. It is the same checker as `tests/agent_schemas.rs`.
+#![cfg(feature = "agent-advisory")]
 
 use flow::ast::Value as ProgramValue;
 use flow::manifest::Registry;

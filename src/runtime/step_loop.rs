@@ -2716,6 +2716,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             } else {
                                 None
                             };
+                            // Taken right after the content fingerprint and before
+                            // execution: the store gate below requires it unchanged.
+                            let dependency_stamp =
+                                if dependencies_declared && dependency_fingerprint.is_some() {
+                                    cache::dependency_stamp(manifest, &cwd)
+                                } else {
+                                    None
+                                };
                             let mut key = match (cache_allowed, dependency_fingerprint) {
                                 (true, Some(fingerprint)) => {
                                     let key = if let Some(module_fingerprint) =
@@ -2804,10 +2812,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             } else {
                                 let completed = run_uncached()?;
                                 if let Some(cache_key) = key.take() {
+                                    // A matching content fingerprint is not enough: a
+                                    // dependency rewritten to B and restored to A during
+                                    // execution matches again, so the stamp must hold too.
                                     let dependencies_unchanged = !dependencies_declared
-                                        || dependency_fingerprint.is_some_and(|expected| {
+                                        || (dependency_fingerprint.is_some_and(|expected| {
                                             dependency_fingerprint_matches(manifest, &cwd, expected)
-                                        });
+                                        }) && dependency_stamp.as_ref().is_some_and(
+                                            |expected| {
+                                                dependency_stamp_matches(manifest, &cwd, expected)
+                                            },
+                                        ));
                                     if dependencies_unchanged {
                                         if let Ok(entry) = cache_output(
                                             manifest,

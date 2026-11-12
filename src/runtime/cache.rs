@@ -541,6 +541,50 @@ pub(super) fn dependency_fingerprint(manifest: &Manifest, cwd: &Path) -> Result<
     fingerprint_dependencies(dependencies, &root)
 }
 
+/// Size and timestamps of each declared dependency, taken next to the content
+/// fingerprint. A write that restores the original bytes still moves the file's
+/// modification and change times, so an A-to-B-to-A excursion during execution
+/// is visible here even though the content fingerprint matches again.
+#[derive(PartialEq, Eq)]
+pub(super) struct DependencyStamp(Vec<(u64, SystemTime, (i64, i64))>);
+
+/// Stamp the manifest's declared dependencies. `None` means stability cannot be
+/// established, so callers must not store a result computed against them.
+/// Missing dependencies are unsettled too: a file created and removed during
+/// execution would otherwise look unchanged.
+pub(super) fn dependency_stamp(manifest: &Manifest, cwd: &Path) -> Option<DependencyStamp> {
+    let dependencies = manifest.cache_dependencies();
+    if dependencies.is_empty() || dependencies.len() > MAX_CACHE_DEPENDENCIES {
+        return None;
+    }
+    let root = fs::canonicalize(cwd).ok()?;
+    let mut entries = Vec::with_capacity(dependencies.len());
+    for dependency in dependencies {
+        let relative = Path::new(dependency);
+        if relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        let path = fs::canonicalize(root.join(relative)).ok()?;
+        if !path.starts_with(&root) {
+            return None;
+        }
+        let metadata = fs::metadata(&path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let modified = metadata.modified().ok()?;
+        #[cfg(unix)]
+        let changed = (metadata.ctime(), metadata.ctime_nsec());
+        #[cfg(not(unix))]
+        let changed = (0, 0);
+        entries.push((metadata.len(), modified, changed));
+    }
+    Some(DependencyStamp(entries))
+}
+
 fn fingerprint_dependencies(dependencies: &[String], root: &Path) -> Result<Option<[u8; 32]>> {
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"flow-cache-dependencies-v1");

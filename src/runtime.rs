@@ -3063,6 +3063,14 @@ fn dependency_fingerprint_matches(manifest: &Manifest, cwd: &Path, expected: [u8
     cache::dependency_fingerprint(manifest, cwd).ok().flatten() == Some(expected)
 }
 
+fn dependency_stamp_matches(
+    manifest: &Manifest,
+    cwd: &Path,
+    expected: &cache::DependencyStamp,
+) -> bool {
+    cache::dependency_stamp(manifest, cwd).as_ref() == Some(expected)
+}
+
 fn cache_key_with_environment<F, I>(
     manifest: &Manifest,
     argv: &[String],

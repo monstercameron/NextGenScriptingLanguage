@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 from release import ROOT, version as release_version
@@ -35,11 +36,26 @@ def pin_checksum(text, array, digest):
     return substitute(text, r"^" + array + r"=\(.*\)$", array + "=('" + digest + "')")
 
 
-def render(out, value, linux_x64=None, linux_arm64=None, source=None, root=ROOT):
+def git_tags(repo=ROOT):
+    """Return the release tags (without the leading v), newest first, as git sorts them."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "tag", "--list", "v*", "--sort=-v:refname"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [tag[1:] for tag in result.stdout.split() if tag.startswith("v")]
+
+
+def render(out, value, linux_x64=None, linux_arm64=None, source=None, root=ROOT, tags=None):
     """Write one directory per package under `out`, each with its PKGBUILD and the inputs
-    it needs, named as the PKGBUILD names them, so makepkg finds them without downloading."""
+    it needs, named as the PKGBUILD names them, so makepkg finds them without downloading.
+    The release must already exist as a git tag, so a PKGBUILD never names a missing tag."""
     if value != release_version(root):
         raise ValueError("version " + value + " is not the repository version")
+    known = git_tags() if tags is None else tags
+    if value not in known:
+        raise ValueError("no git tag v" + value + " to render the AUR packages from")
     binaries = {"x86_64": linux_x64, "aarch64": linux_arm64}
     for name in PACKAGES:
         target = out / name

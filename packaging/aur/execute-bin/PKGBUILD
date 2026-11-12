@@ -1,7 +1,7 @@
 # Maintainer: Execute maintainers <noreply@github.com>
 # Prebuilt release binaries. tools/aur.py renders _tag and the checksums for each release.
 pkgname=execute-bin
-_tag=0.9.0-rc.5
+_tag=0.9.0-rc.4
 pkgver=${_tag//-/_}
 pkgrel=1
 pkgdesc='Readable native command workflows (prebuilt release binaries)'

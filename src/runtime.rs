@@ -107,8 +107,9 @@ pub(crate) use service::next_interval;
 pub(crate) use service::{run_program_module_service, ProgramServiceContext};
 pub use service::{
     run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
-    run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
-    MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
+    run_service_with_cancellation, run_service_with_schedule_options,
+    run_service_with_schedule_state, CalendarDedupPolicy, MissedTickPolicy, ScheduleOptions,
+    ServiceLimits, ServiceResult,
 };
 pub use stdio::{write_cancellable, write_diagnostic, write_exit_diagnostic, write_with_deadline};
 

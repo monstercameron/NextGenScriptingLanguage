@@ -1,5 +1,6 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, Local, Timelike};
+use std::path::Path;
 
 /// A parsed five-field Unix cron schedule using numeric fields only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +168,50 @@ pub(crate) fn advance_cron_minute(mark: i64, now_unix: i64) -> (i64, bool) {
     (observed, observed > mark)
 }
 
+const CRON_PROGRESS_VERSION: u64 = 1;
+
+/// Read the saved cron minute for `expression` from a `--schedule-state` file.
+/// A missing, unreadable, corrupt, foreign or differently-versioned file yields
+/// `None`, so the caller starts as if nothing had fired.
+pub(crate) fn read_cron_progress(path: &Path, expression: &str) -> Option<i64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if value.get("version")?.as_u64()? != CRON_PROGRESS_VERSION {
+        return None;
+    }
+    if value.get("expression")?.as_str()? != expression {
+        return None;
+    }
+    value.get("last_minute")?.as_i64()
+}
+
+/// Atomically replace the saved cron minute: write a temporary sibling, sync it,
+/// then rename it over `path`, so a crash leaves either the old or the new file.
+pub(crate) fn write_cron_progress(path: &Path, expression: &str, last_minute: i64) -> Result<()> {
+    let body = serde_json::json!({
+        "version": CRON_PROGRESS_VERSION,
+        "expression": expression,
+        "last_minute": last_minute,
+    })
+    .to_string();
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("schedule state path has no file name"))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(".tmp");
+    let temporary = path.with_file_name(temporary_name);
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)
+            .with_context(|| format!("creating schedule state {}", temporary.display()))?;
+        file.write_all(body.as_bytes())
+            .and_then(|()| file.sync_all())
+            .with_context(|| format!("writing schedule state {}", temporary.display()))?;
+    }
+    std::fs::rename(&temporary, path)
+        .with_context(|| format!("replacing schedule state {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +306,33 @@ mod tests {
                 "accepted {expression:?}"
             );
         }
+    }
+
+    #[test]
+    fn cron_progress_round_trips_and_ignores_unusable_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("schedule.json");
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), None);
+
+        write_cron_progress(&path, "0 3 * * *", 28_000_000).unwrap();
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), Some(28_000_000));
+        // A saved minute belongs to one expression; a changed expression starts fresh.
+        assert_eq!(read_cron_progress(&path, "0 4 * * *"), None);
+        // The temporary sibling is renamed away, not left behind.
+        assert!(!directory.path().join("schedule.json.tmp").exists());
+
+        write_cron_progress(&path, "0 3 * * *", 28_000_060).unwrap();
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), Some(28_000_060));
+
+        std::fs::write(&path, "{not json").unwrap();
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), None);
+        std::fs::write(
+            &path,
+            r#"{"version":2,"expression":"0 3 * * *","last_minute":1}"#,
+        )
+        .unwrap();
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), None);
+        std::fs::write(&path, r#"{"version":1,"expression":"0 3 * * *"}"#).unwrap();
+        assert_eq!(read_cron_progress(&path, "0 3 * * *"), None);
     }
 }

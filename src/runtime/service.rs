@@ -2,11 +2,12 @@
 use super::checkpoint::{CheckpointOptions, Journal};
 use super::resume;
 use super::*;
-use crate::schedule::{advance_cron_minute, CronSchedule};
+use crate::schedule::{advance_cron_minute, read_cron_progress, write_cron_progress, CronSchedule};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use std::collections::{BTreeSet, VecDeque};
 #[cfg(unix)]
 use std::os::fd::RawFd;
+use std::path::Path;
 #[cfg(unix)]
 use std::process::ChildStdout;
 use std::time::Duration;
@@ -123,6 +124,71 @@ impl CalendarMinuteDedup {
         Ok(Some(local))
     }
 }
+
+/// Queue the cron ticks whose minutes lie in `last_minute + 1 ..= minute`.
+/// `missed_ticks` decides which of the matching minutes survive; a tick is
+/// `(epoch minute, local time)`.
+fn queue_cron_ticks(
+    schedule: &CronSchedule,
+    dedup: &mut CalendarMinuteDedup,
+    pending_ticks: &mut VecDeque<(i64, chrono::DateTime<Local>)>,
+    last_minute: i64,
+    minute: i64,
+    missed_ticks: MissedTickPolicy,
+    calendar_dedup: CalendarDedupPolicy,
+) -> Result<()> {
+    let first_minute = match missed_ticks {
+        MissedTickPolicy::Skip => minute,
+        MissedTickPolicy::Coalesce | MissedTickPolicy::CatchUp { .. } => {
+            (minute - CRON_CATCH_UP_LOOKBACK_MINUTES + 1).max(last_minute + 1)
+        }
+    };
+    let mut matched = Vec::new();
+    for candidate_minute in first_minute..=minute {
+        let candidate = match dedup.accepts(candidate_minute, calendar_dedup)? {
+            Some(candidate) if schedule.matches(&candidate) => candidate,
+            _ => continue,
+        };
+        matched.push((candidate_minute, candidate));
+    }
+    match missed_ticks {
+        MissedTickPolicy::Skip => {
+            if let Some(tick) = matched.into_iter().last() {
+                pending_ticks.push_back(tick);
+            }
+        }
+        MissedTickPolicy::Coalesce => {
+            if let Some(tick) = matched.into_iter().last() {
+                pending_ticks.clear();
+                pending_ticks.push_back(tick);
+            }
+        }
+        MissedTickPolicy::CatchUp { max_runs } => {
+            let available = max_runs.saturating_sub(pending_ticks.len());
+            for tick in matched.into_iter().take(available) {
+                pending_ticks.push_back(tick);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Save cron progress only when the minute changes, so the file is rewritten
+/// about once a minute rather than on every poll.
+fn save_cron_progress(
+    path: &Path,
+    expression: &str,
+    minute: i64,
+    saved_minute: &mut Option<i64>,
+) -> Result<()> {
+    if *saved_minute == Some(minute) {
+        return Ok(());
+    }
+    write_cron_progress(path, expression, minute)?;
+    *saved_minute = Some(minute);
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct ServiceResult {
     pub runs: usize,
@@ -682,6 +748,53 @@ pub fn run_service_checkpointed_with_schedule_options(
     )
 }
 
+/// Run a service whose cron progress is saved in `schedule_state` (a file the
+/// caller names, such as `--schedule-state FILE`). After each saved minute, a
+/// restart handles the minutes that passed while the service was stopped
+/// according to `schedule.missed_ticks`. A missing, corrupt or foreign state
+/// file starts the schedule as if nothing had fired.
+pub fn run_service_with_schedule_state(
+    program: &Program,
+    registry: &Registry,
+    options: &RunOptions,
+    limits: &ServiceLimits,
+    schedule: &ScheduleOptions,
+    schedule_state: &Path,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<ServiceResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
+    schedule.validate()?;
+    let signals = register_service_signals(options)?;
+    run_service_with_signals(
+        ServiceRequest {
+            program,
+            registry,
+            options,
+            limits,
+            checkpoint: None,
+            schedule_options: *schedule,
+            schedule_state: Some(schedule_state),
+            signals,
+            additional_sensitivity: None,
+        },
+        emit,
+    )
+}
+
+fn register_service_signals(options: &RunOptions) -> Result<Signals> {
+    let service_started = Instant::now();
+    let workflow_deadline = options
+        .total_timeout
+        .map(|timeout| {
+            service_started
+                .checked_add(timeout)
+                .context("total workflow timeout is too large")
+        })
+        .transpose()?;
+    Signals::register_with_deadline(workflow_deadline)
+}
+
 fn run_service_internal(
     program: &Program,
     registry: &Registry,
@@ -694,16 +807,7 @@ fn run_service_internal(
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     schedule_options.validate()?;
-    let service_started = Instant::now();
-    let workflow_deadline = options
-        .total_timeout
-        .map(|timeout| {
-            service_started
-                .checked_add(timeout)
-                .context("total workflow timeout is too large")
-        })
-        .transpose()?;
-    let signals = Signals::register_with_deadline(workflow_deadline)?;
+    let signals = register_service_signals(options)?;
     run_service_with_signals(
         ServiceRequest {
             program,
@@ -712,6 +816,7 @@ fn run_service_internal(
             limits,
             checkpoint,
             schedule_options,
+            schedule_state: None,
             signals,
             additional_sensitivity: None,
         },
@@ -765,6 +870,7 @@ pub(crate) fn run_program_module_service(
             limits: &limits,
             checkpoint: None,
             schedule_options: ScheduleOptions::default(),
+            schedule_state: None,
             signals,
             additional_sensitivity: Some(context.additional_sensitivity),
         },
@@ -793,6 +899,7 @@ struct ServiceRequest<'a> {
     limits: &'a ServiceLimits,
     checkpoint: Option<&'a CheckpointOptions>,
     schedule_options: ScheduleOptions,
+    schedule_state: Option<&'a Path>,
     signals: Signals,
     additional_sensitivity: Option<crate::security::SensitivitySet>,
 }
@@ -808,6 +915,7 @@ fn run_service_with_signals(
         limits,
         checkpoint,
         schedule_options,
+        schedule_state,
         mut signals,
         additional_sensitivity,
     } = request;
@@ -1129,54 +1237,39 @@ fn run_service_with_signals(
         }
         Trigger::Cron { expression, .. } => {
             let schedule = CronSchedule::parse(expression)?;
-            // Begin at the next calendar minute. Catch-up scans only a bounded
-            // recent window so a long outage cannot produce unbounded work.
-            let mut last_minute = Local::now().timestamp().div_euclid(60);
+            // Resume after the minute saved for this expression. Without a usable
+            // state file, begin at the next calendar minute. Catch-up scans only a
+            // bounded recent window so a long outage cannot produce unbounded work.
+            let loaded_minute =
+                schedule_state.and_then(|path| read_cron_progress(path, expression));
+            let mut saved_minute = loaded_minute;
+            let mut last_minute =
+                loaded_minute.unwrap_or_else(|| Local::now().timestamp().div_euclid(60));
             let mut dedup = CalendarMinuteDedup::default();
             let mut pending_ticks = VecDeque::new();
             loop {
                 stopped(&signals)?;
                 let (minute, fresh) = advance_cron_minute(last_minute, Local::now().timestamp());
                 if fresh {
-                    let first_minute = match schedule_options.missed_ticks {
-                        MissedTickPolicy::Skip => minute,
-                        MissedTickPolicy::Coalesce | MissedTickPolicy::CatchUp { .. } => {
-                            (minute - CRON_CATCH_UP_LOOKBACK_MINUTES + 1).max(last_minute + 1)
-                        }
-                    };
-                    let mut matched = Vec::new();
-                    for candidate_minute in first_minute..=minute {
-                        let candidate = match dedup
-                            .accepts(candidate_minute, schedule_options.calendar_dedup)?
-                        {
-                            Some(candidate) if schedule.matches(&candidate) => candidate,
-                            _ => continue,
-                        };
-                        matched.push(candidate);
-                    }
-                    match schedule_options.missed_ticks {
-                        MissedTickPolicy::Skip => {
-                            if let Some(candidate) = matched.into_iter().last() {
-                                pending_ticks.push_back(candidate);
-                            }
-                        }
-                        MissedTickPolicy::Coalesce => {
-                            if let Some(candidate) = matched.into_iter().last() {
-                                pending_ticks.clear();
-                                pending_ticks.push_back(candidate);
-                            }
-                        }
-                        MissedTickPolicy::CatchUp { max_runs } => {
-                            let available = max_runs.saturating_sub(pending_ticks.len());
-                            for candidate in matched.into_iter().take(available) {
-                                pending_ticks.push_back(candidate);
-                            }
-                        }
-                    }
+                    queue_cron_ticks(
+                        &schedule,
+                        &mut dedup,
+                        &mut pending_ticks,
+                        last_minute,
+                        minute,
+                        schedule_options.missed_ticks,
+                        schedule_options.calendar_dedup,
+                    )?;
                 }
                 // Also lowers the mark when the clock was stepped back.
                 last_minute = minute;
-                if let Some(candidate) = pending_ticks.pop_front() {
+                if let Some(path) = schedule_state {
+                    if pending_ticks.is_empty() {
+                        // Every tick up to this minute has fired or been dropped by policy.
+                        save_cron_progress(path, expression, minute, &mut saved_minute)?;
+                    }
+                }
+                if let Some((tick_minute, candidate)) = pending_ticks.pop_front() {
                     trace_event(
                         options.trace,
                         &signals,
@@ -1196,6 +1289,10 @@ fn run_service_with_signals(
                     )?;
                     if limit_reached(limits, &result) {
                         return Ok(result);
+                    }
+                    // Saved after the run completes: a stop during the run re-runs it on restart.
+                    if let Some(path) = schedule_state {
+                        save_cron_progress(path, expression, tick_minute, &mut saved_minute)?;
                     }
                     continue;
                 }
@@ -1273,6 +1370,7 @@ mod tests {
                 limits: &limits,
                 checkpoint: None,
                 schedule_options: ScheduleOptions::default(),
+                schedule_state: None,
                 signals,
                 additional_sensitivity: None,
             },
@@ -1411,6 +1509,108 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pending, 2);
+    }
+
+    /// Epoch minute of a local wall-clock time, so tests read like a calendar.
+    fn local_minute(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+        Local
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .expect("valid local time")
+            .timestamp()
+            .div_euclid(60)
+    }
+
+    /// Runs the restart path of the cron loop with an injected clock: the saved
+    /// minute is what the previous process last accounted for, and `restart_minute`
+    /// is the first wall-clock reading after the restart. Returns how many handler
+    /// runs the restart queues.
+    fn cron_runs_on_restart(
+        expression: &str,
+        saved_minute: i64,
+        restart_minute: i64,
+        missed_ticks: MissedTickPolicy,
+    ) -> usize {
+        let schedule = CronSchedule::parse(expression).unwrap();
+        let mut dedup = CalendarMinuteDedup::default();
+        let mut pending_ticks = VecDeque::new();
+        // The clock reading is mid-minute, so the minute index is restart_minute.
+        let (minute, fresh) = advance_cron_minute(saved_minute, restart_minute * 60 + 30);
+        if fresh {
+            queue_cron_ticks(
+                &schedule,
+                &mut dedup,
+                &mut pending_ticks,
+                saved_minute,
+                minute,
+                missed_ticks,
+                CalendarDedupPolicy::AbsoluteMinute,
+            )
+            .unwrap();
+        }
+        pending_ticks.len()
+    }
+
+    #[test]
+    fn daily_job_stopped_over_two_due_times_runs_once_under_catch_up_or_coalesce() {
+        // Last fired at 03:00 on 14 January; restarted at 03:30 on 16 January, so the
+        // 15th and 16th 03:00 ticks were both missed while stopped.
+        let saved = local_minute(2024, 1, 14, 3, 0);
+        let restart = local_minute(2024, 1, 16, 3, 30);
+        assert_eq!(
+            cron_runs_on_restart(
+                "0 3 * * *",
+                saved,
+                restart,
+                MissedTickPolicy::CatchUp { max_runs: 1 }
+            ),
+            1
+        );
+        assert_eq!(
+            cron_runs_on_restart("0 3 * * *", saved, restart, MissedTickPolicy::Coalesce),
+            1
+        );
+        assert_eq!(
+            cron_runs_on_restart(
+                "0 3 * * *",
+                saved,
+                restart,
+                MissedTickPolicy::CatchUp { max_runs: 2 }
+            ),
+            2
+        );
+        // Skip keeps the original behaviour: only the current minute is considered.
+        assert_eq!(
+            cron_runs_on_restart("0 3 * * *", saved, restart, MissedTickPolicy::Skip),
+            0
+        );
+    }
+
+    #[test]
+    fn restart_does_not_repeat_a_tick_already_fired_before_the_stop() {
+        // The 03:00 run fired and was saved; a restart at 03:30 must not run it again.
+        let saved = local_minute(2024, 1, 15, 3, 0);
+        let restart = local_minute(2024, 1, 15, 3, 30);
+        assert_eq!(
+            cron_runs_on_restart(
+                "0 3 * * *",
+                saved,
+                restart,
+                MissedTickPolicy::CatchUp { max_runs: 1 }
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn restart_before_a_due_time_runs_that_tick_once() {
+        // Stopped at 02:59 with nothing fired; restarted at 03:05, after the due time.
+        let saved = local_minute(2024, 1, 15, 2, 59);
+        let restart = local_minute(2024, 1, 15, 3, 5);
+        assert_eq!(
+            cron_runs_on_restart("0 3 * * *", saved, restart, MissedTickPolicy::Coalesce),
+            1
+        );
     }
 
     #[test]

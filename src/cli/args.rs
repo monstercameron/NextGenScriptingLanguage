@@ -76,6 +76,9 @@ pub(crate) struct Args {
     pub(crate) missed_ticks: Option<String>,
     pub(crate) max_catch_up: Option<usize>,
     pub(crate) calendar_dedup: Option<String>,
+    /// `run --schedule-state FILE`: keep the trigger's cron progress in FILE so a
+    /// restart handles the minutes that passed while the service was stopped.
+    pub(crate) schedule_state: Option<PathBuf>,
     pub(crate) command_timeout: Option<std::time::Duration>,
     pub(crate) fs_timeout: Option<std::time::Duration>,
     pub(crate) drain_timeout: Option<std::time::Duration>,

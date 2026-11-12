@@ -77,6 +77,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut missed_ticks = None;
     let mut max_catch_up = None;
     let mut calendar_dedup = None;
+    let mut schedule_state: Option<PathBuf> = None;
     let mut command_timeout = None;
     let mut fs_timeout = None;
     let mut drain_timeout = None;
@@ -558,6 +559,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     "instant or local",
                 )?);
             }
+            "--schedule-state" if matches!(command, "run" | "resume") => {
+                if schedule_state.is_some() {
+                    bail!("--schedule-state may be specified only once");
+                }
+                schedule_state = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--schedule-state",
+                    "a state file path",
+                )?));
+            }
             "--max-record-bytes" if matches!(command, "run" | "resume") => {
                 if max_record_bytes_seen {
                     bail!("--max-record-bytes may be specified only once");
@@ -749,6 +761,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         missed_ticks,
         max_catch_up,
         calendar_dedup,
+        schedule_state,
         command_timeout,
         fs_timeout,
         drain_timeout,
@@ -968,5 +981,39 @@ mod tests {
             .expect("arguments parse")
             .expect("check arguments");
         assert_eq!(parsed.manifest_dir.as_deref(), Some(base.path()));
+    }
+
+    #[test]
+    fn schedule_state_option_is_recorded_for_run() {
+        let arguments = vec![
+            "run".to_owned(),
+            "workflow.program".to_owned(),
+            "--schedule-state".to_owned(),
+            "state.json".to_owned(),
+        ];
+        let parsed = parse_args(&arguments)
+            .expect("arguments parse")
+            .expect("run arguments");
+        assert_eq!(
+            parsed.schedule_state.as_deref(),
+            Some(std::path::Path::new("state.json"))
+        );
+    }
+
+    #[test]
+    fn schedule_state_option_needs_a_path_and_is_not_a_check_option() {
+        let missing = vec![
+            "run".to_owned(),
+            "workflow.program".to_owned(),
+            "--schedule-state".to_owned(),
+        ];
+        assert!(parse_args(&missing).is_err());
+        let check = vec![
+            "check".to_owned(),
+            "workflow.program".to_owned(),
+            "--schedule-state".to_owned(),
+            "state.json".to_owned(),
+        ];
+        assert!(parse_args(&check).is_err());
     }
 }

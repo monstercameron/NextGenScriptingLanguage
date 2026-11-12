@@ -625,7 +625,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     {
         let name = &arguments[0];
         let synopsis = match name.as_str() {
-            "test" => "Usage: execute test [OPTIONS] FILE...",
+            "test" => "Usage: execute test [OPTIONS] [--filter NAME] FILE...",
             "run-parts" => "Usage: execute run-parts [OPTIONS] DIRECTORY",
             "show-run" => "Usage: execute show-run [OPTIONS] RECORD",
             "replay" => "Usage: execute replay [OPTIONS] RECORD",
@@ -949,6 +949,8 @@ fn check_one(args: Args) -> Result<CheckOutcome> {
             bail!("graph programs require the graph feature; rebuild with --features graph");
         }
         let (static_diagnostics, finite_check_snapshot) = static_check_diagnostics(&args, source);
+        let deprecation_warnings =
+            applet_deprecation_warnings(&args, finite_check_snapshot.as_ref());
         let diagnostic_source = if json {
             finite_check_snapshot
                 .as_ref()
@@ -968,6 +970,9 @@ fn check_one(args: Args) -> Result<CheckOutcome> {
                 eprintln!(
                     "warning[data_flow_policy_not_configured]: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants"
                 );
+            }
+            for warning in &deprecation_warnings {
+                eprintln!("warning[applet_deprecated]: {warning}");
             }
             for diagnostic in static_diagnostics.iter().filter(|diagnostic| {
                 diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning
@@ -1025,6 +1030,13 @@ fn check_one(args: Args) -> Result<CheckOutcome> {
                 "message": "--capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants"
             }));
         }
+        for warning in &deprecation_warnings {
+            diagnostics.push(serde_json::json!({
+                "severity": "warning",
+                "code": "applet_deprecated",
+                "message": warning
+            }));
+        }
         if let Err(error) = &result {
             if !has_static_error {
                 let loop_error = error.downcast_ref::<runtime::ForEachInputTypeError>();
@@ -1063,6 +1075,40 @@ fn check_one(args: Args) -> Result<CheckOutcome> {
             report: report_value,
         })
     }
+}
+
+/// The `check` warnings for deprecated applets that the program calls (#498). They never
+/// change the exit status. Best effort: a program that does not parse gives none, because
+/// its parse error is reported by the authoritative load.
+fn applet_deprecation_warnings(args: &Args, snapshot: Option<&FiniteCheckSnapshot>) -> Vec<String> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+    let Ok(path) = program_resolution_path(args) else {
+        return Vec::new();
+    };
+    let cwd = path.parent().unwrap_or(path.as_path()).to_path_buf();
+    let Ok(program) = flow::program_files::parse_source_resolved(
+        &path,
+        &snapshot.source,
+        Some(flow::program_files::Access {
+            registry: &snapshot.registry,
+            cwd: &cwd,
+        }),
+    ) else {
+        return Vec::new();
+    };
+    let names: std::collections::BTreeSet<&str> = flow::modules::program_invocations(&program)
+        .into_iter()
+        .map(|call| call.operation.as_str())
+        .collect();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let manifest = snapshot.registry.resolve(name).ok()?;
+            manifest.execution_contract()?.deprecation_warning(name)
+        })
+        .collect()
 }
 
 /// Reads the program text for `check --stdin` from standard input. The limit is the one a
@@ -1162,6 +1208,22 @@ fn static_check_diagnostics(
                 // its existing point so catalog errors retain their ordering.
                 Err(_) => (Vec::new(), None),
             }
+        }
+        // A stream is checked only for its invocations' unknown parameters (#476).
+        Some(source)
+            if flow::stream::is_stream(&source)
+                && !is_screen_source(&source)
+                && !is_graph_source(&source) =>
+        {
+            let diagnostics = match load_registry(
+                args.manifest_dir.clone(),
+                args.manifest_catalog.clone(),
+                ManifestCheck::Full,
+            ) {
+                Ok(registry) => flow::stream::parameter_diagnostics(&source, &registry),
+                Err(_) => Vec::new(),
+            };
+            (diagnostics, None)
         }
         _ => (Vec::new(), None),
     }
@@ -2329,6 +2391,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     {
         bail!("--missed-ticks applies only to interval- or calendar-triggered programs");
     }
+    if args.schedule_state.is_some() && program.trigger.is_none() {
+        bail!("--schedule-state applies only to triggered programs");
+    }
+    if args.schedule_state.is_some() && args.checkpoint_dir.is_some() {
+        bail!("--schedule-state cannot be combined with --checkpoint");
+    }
     if args.max_runs.is_some() && program.trigger.is_none() {
         bail!("--max-runs applies only to triggered programs");
     }
@@ -2682,6 +2750,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &program, &registry, &options, &limits, checkpoint, &schedule, &mut emit,
                     )
                     .map_err(|error| redact_runtime_error(&registry, error))?;
+                } else if let Some(state) = args.schedule_state.as_deref() {
+                    runtime::run_service_with_schedule_state(
+                        &program, &registry, &options, &limits, &schedule, state, emit,
+                    )
+                    .map_err(|error| redact_runtime_error(&registry, error))?;
                 } else {
                     runtime::run_service_with_schedule_options(
                         &program, &registry, &options, &limits, &schedule, emit,
@@ -2876,6 +2949,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
         (args.missed_ticks.is_some(), "--missed-ticks"),
         (args.max_catch_up.is_some(), "--max-catch-up"),
         (args.calendar_dedup.is_some(), "--calendar-dedup"),
+        (args.schedule_state.is_some(), "--schedule-state"),
         (args.total_timeout.is_some(), "--total-timeout-ms"),
         (args.kill_grace.is_some(), "--kill-grace-ms"),
         (args.retry_uncertain, "--retry-uncertain"),
@@ -3854,7 +3928,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 
 #[cfg(feature = "tooling")]
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--execution-mode MODE] [--capability-policy FILE] [--data-flow-policy FILE] [--clear-env | --env-allow NAME[,NAME...]] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--execution-mode MODE] [--hardening derived|baseline|none] [--capability-policy FILE] [--data-flow-policy FILE] [--clear-env | --env-allow NAME[,NAME...]] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
@@ -3870,6 +3944,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let mut capability_policy = None;
     let mut data_flow_policy = None;
     let mut execution_mode: Option<flow::capabilities::ExecutionMode> = None;
+    let mut hardening: Option<flow::service_deployment::HardeningMode> = None;
     let mut answers_file = None;
     let mut persistent = false;
     let mut supplied_inputs = BTreeMap::new();
@@ -3976,6 +4051,18 @@ fn service_cli(arguments: &[String]) -> Result<()> {
                     _ => bail!("--execution-mode must be trusted or untrusted"),
                 });
             }
+            "--hardening" => {
+                if hardening.is_some() {
+                    bail!("--hardening may be specified once");
+                }
+                let value = take_option_value(
+                    arguments,
+                    &mut index,
+                    "--hardening",
+                    "derived, baseline, or none",
+                )?;
+                hardening = Some(flow::service_deployment::HardeningMode::parse(&value)?);
+            }
             "--input" => {
                 let pair = take_option_value(arguments, &mut index, "--input", "NAME=VALUE")?;
                 let (name, value) = pair
@@ -4009,6 +4096,9 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     }
     if answers_file.is_some() && !supplied_inputs.is_empty() {
         bail!("--answers cannot be combined with --input in service generation");
+    }
+    if hardening.is_some() && manifest_catalog.is_some() {
+        bail!("--hardening cannot be combined with --manifest-catalog in service generation");
     }
     if let Some(path) = answers_file.as_deref() {
         let path = flow::service_deployment::validate_private_answers_file(path)?;
@@ -4090,11 +4180,14 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         program_arguments: &program_arguments,
         persistent,
     };
-    let rendered = match manifest_catalog.as_deref() {
-        Some(path) => {
+    let rendered = match (manifest_catalog.as_deref(), hardening) {
+        (Some(path), _) => {
             flow::service_deployment::render_for_workflow_with_manifest_catalog(&request, path)?
         }
-        None => flow::service_deployment::render_for_workflow(&request)?,
+        (None, Some(mode)) => {
+            flow::service_deployment::render_for_workflow_with_hardening(&request, &registry, mode)?
+        }
+        (None, None) => flow::service_deployment::render_for_workflow(&request)?,
     };
     write!(io::stdout(), "{rendered}")?;
     Ok(())

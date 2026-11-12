@@ -957,7 +957,9 @@ fn generated_export_manifest(
     }))?)
 }
 
-fn program_invocations(program: &Program) -> Vec<&Invocation> {
+/// Every applet invocation the program can make: its steps, its definitions and a listen
+/// trigger's source call. `check` uses it to report deprecated applets (#498).
+pub fn program_invocations(program: &Program) -> Vec<&Invocation> {
     let mut calls = Vec::new();
     collect_step_invocations(&program.steps, &mut calls);
     for definition in program.definitions.values() {

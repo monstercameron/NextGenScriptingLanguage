@@ -108,8 +108,22 @@ pub(crate) struct Plan {
     pub body_start: usize,
     pub screen: Option<crate::ui::syntax::Screen>,
 }
+#[cfg(test)]
+thread_local! {
+    /// Test-only count of `Plan::parse` calls on this thread, so tests can prove how
+    /// often a source is parsed.
+    static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_parse() {
+    PARSES.with(|count| count.set(count.get() + 1));
+}
+
 impl Plan {
     pub fn parse(source: &str) -> Result<Self> {
+        #[cfg(test)]
+        count_parse();
         if source.len() > 65536 {
             bail!("source exceeds 64 KiB");
         }
@@ -407,6 +421,22 @@ pub(crate) fn validate(
     max_bytes: usize,
     run_mode: bool,
 ) -> Result<Plan> {
+    let plan = Plan::parse(&doc.source)?;
+    validate_parsed(doc, &plan, registry, max_bytes, run_mode)?;
+    Ok(plan)
+}
+
+/// `validate` for a plan that was already parsed from `doc.source`. The caller owns
+/// that pairing: `State.plan` is parsed from `State.doc.source` and is replaced in the
+/// same step as every write of the source (see the list at `State::plan`), so an event
+/// that only queues UI input reuses it instead of parsing the source again.
+fn validate_parsed(
+    doc: &Document,
+    plan: &Plan,
+    registry: &Registry,
+    max_bytes: usize,
+    run_mode: bool,
+) -> Result<()> {
     if !doc.cwd.is_absolute() || !doc.cwd.is_dir() || doc.cwd.to_str().is_none() {
         bail!("cwd must be an existing absolute directory");
     }
@@ -427,7 +457,6 @@ pub(crate) fn validate(
             );
         }
     }
-    let plan = Plan::parse(&doc.source)?;
     if registry
         .host_state::<Option<crate::capabilities::CapabilityPolicy>>()
         .is_some()
@@ -478,7 +507,7 @@ pub(crate) fn validate(
         if !within_state_limit(doc)? {
             bail!("state exceeds 8 MiB");
         }
-        return Ok(plan);
+        return Ok(());
     }
     if !doc.ui.is_null() {
         bail!("ui state requires a screen program");
@@ -584,7 +613,7 @@ pub(crate) fn validate(
     if !within_state_limit(doc)? {
         bail!("state exceeds 8 MiB");
     }
-    Ok(plan)
+    Ok(())
 }
 
 /// How a run-mode program ended: the status it reports to the process, and the
@@ -604,6 +633,13 @@ pub(crate) struct State {
     pub exit: Option<ExitRecord>,
     /// Breakpoints and the statement a run is paused before.
     pub debug: super::debug::Control,
+    /// `Plan::parse(&doc.source)`, kept as a cache of the source. Every write of
+    /// `doc.source` replaces this in the same step, or writes the same text back:
+    /// the start in `mod.rs` (`serve`, from `validate`), the edit in `request`
+    /// (`create`/`update`/`delete`/`patch`, which parses the candidate source and
+    /// sets this plan only after validation), and the reset in `request`, which
+    /// clones the document and keeps its source. The worker in `worker.rs` clones
+    /// the document and applies a node's bindings and input, never the source.
     pub plan: Plan,
     pub revision: u64,
     pub running: bool,
@@ -1563,17 +1599,18 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if state.plan.screen.is_none() {
                 bail!("event requires a live UI program");
             }
-            state
-                .doc
-                .queue_ui_event(request.value.into_option(), |candidate| {
-                    validate(
-                        candidate,
-                        &shared.registry,
-                        shared.max_bytes,
-                        shared.run_mode,
-                    )
-                    .map(|_| ())
-                })?;
+            // The event does not change the source, so the plan the state already holds
+            // (parsed from `doc.source`, see `State::plan`) is validated against, not re-parsed.
+            let State { doc, plan, .. } = &mut *state;
+            doc.queue_ui_event(request.value.into_option(), |candidate| {
+                validate_parsed(
+                    candidate,
+                    plan,
+                    &shared.registry,
+                    shared.max_bytes,
+                    shared.run_mode,
+                )
+            })?;
             state.ui_dirty = true;
             state.changed("ui_event_queued");
         }
@@ -1686,7 +1723,9 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 // replace the stored program with its redacted presentation.
                 candidate.source.clone_from(&state.doc.source);
             }
-            if candidate.source != state.doc.source {
+            // The plan for the candidate's source: parsed once when the source changes,
+            // otherwise the plan the state already holds for the same text.
+            let plan = if candidate.source != state.doc.source {
                 let plan = Plan::parse(&candidate.source)?;
                 candidate.ui = if let Some(screen) = &plan.screen {
                     crate::ui::normalize_live_state(
@@ -1697,9 +1736,13 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 } else {
                     Json::Null
                 };
-            }
-            let plan = validate(
+                plan
+            } else {
+                state.plan.clone()
+            };
+            validate_parsed(
                 &candidate,
+                &plan,
                 &shared.registry,
                 shared.max_bytes,
                 shared.run_mode,
@@ -1881,5 +1924,169 @@ mod capacity_tests {
         assert_eq!(doc.bindings["event"], json!("é\n"));
         assert!(doc.inbox.is_empty());
         assert_eq!(doc.input.bytes(), "é\n".as_bytes());
+    }
+
+    const CLOCK: &str = "open a screen titled \"clock\"\nplace clock on the left\ndefine a program named clock\n  show a badge named status with text \"waiting\"\n  show a button named refresh labelled \"Tick\"\n  whenever refresh is pressed\n    show \"ticked\" in status\n";
+
+    fn parses() -> usize {
+        PARSES.with(|count| count.get())
+    }
+
+    fn reset_parses() {
+        PARSES.with(|count| count.set(0));
+    }
+
+    /// A served screen program, built as `serve` builds it, with no registry policy.
+    fn live_screen(source: &str) -> Arc<Shared> {
+        let plan = Plan::parse(source).unwrap();
+        let ui = crate::ui::initial_live_state(plan.screen.as_ref().unwrap()).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let state = State {
+            doc: Document {
+                source: source.to_owned(),
+                cwd: cwd.clone(),
+                bindings: BTreeMap::new(),
+                input: Data::default(),
+                cursor: 0,
+                inbox: VecDeque::new(),
+                user: Map::new(),
+                ui,
+            },
+            job_session: Arc::new(crate::runtime::live::JobSession::new()),
+            redactor: Arc::default(),
+            registry: Registry::default(),
+            exit: None,
+            debug: Default::default(),
+            plan,
+            revision: 0,
+            running: false,
+            in_flight: false,
+            status: "paused".into(),
+            uncertain: false,
+            error: None,
+            active: None,
+            step_budget: None,
+            cycle: false,
+            runs: 0,
+            nodes: 0,
+            launches: 0,
+            cache_hits: 0,
+            last_output: Data::default(),
+            active_cancel: Arc::new(AtomicBool::new(false)),
+            producer_cancel: Arc::new(AtomicBool::new(false)),
+            producer_done: false,
+            producer_error: None,
+            producer_epoch: 0,
+            events: VecDeque::new(),
+            ui_epoch: 0,
+            ui_dirty: true,
+            ui_frame: String::new(),
+            ui_applied_revision: 0,
+            ui_errors: Json::Null,
+        };
+        Arc::new(Shared {
+            state: Mutex::new(state),
+            wake: Condvar::new(),
+            stop: Arc::new(AtomicBool::new(false)),
+            registry: Registry::default(),
+            flood: Mutex::new(FloodBudget::new()),
+            max_bytes: 262144,
+            initial_cwd: cwd,
+            initial_bindings: BTreeMap::new(),
+            initial_input: Data::default(),
+            headless: true,
+            run_mode: false,
+            agent_policy_path: None,
+            allow_unauthenticated: true,
+        })
+    }
+
+    fn send(shared: &Shared, op: &str, path: Option<&str>, value: Option<Json>) -> Result<Json> {
+        request(
+            shared,
+            Request {
+                op: op.to_owned(),
+                path: path.map(str::to_owned),
+                value: value.map_or(RequestValue::Missing, RequestValue::Present),
+                operations: None,
+                action: None,
+                if_revision: None,
+                after: None,
+                timeout_ms: None,
+            },
+        )
+    }
+
+    /// One press, then drain the queue the UI worker would drain, so the queue
+    /// capacity does not end the run.
+    fn press(shared: &Shared) -> Result<Json> {
+        let result = send(
+            shared,
+            "event",
+            None,
+            Some(json!({"type": "press", "program": "clock", "widget": "refresh"})),
+        );
+        shared.state.lock().unwrap().doc.ui["events"] = json!([]);
+        result
+    }
+
+    #[test]
+    fn a_thousand_ui_events_parse_the_source_once() {
+        reset_parses();
+        let shared = live_screen(CLOCK);
+        assert_eq!(parses(), 1);
+        for _ in 0..1000 {
+            press(&shared).unwrap();
+        }
+        assert_eq!(parses(), 1);
+    }
+
+    #[test]
+    fn a_source_edit_parses_once_and_later_events_use_the_new_plan() {
+        reset_parses();
+        let shared = live_screen(CLOCK);
+        let renamed = CLOCK.replace("titled \"clock\"", "titled \"renamed\"");
+        send(&shared, "update", Some("/source"), Some(json!(renamed))).unwrap();
+        assert_eq!(parses(), 2);
+        assert_eq!(
+            shared
+                .state
+                .lock()
+                .unwrap()
+                .plan
+                .screen
+                .as_ref()
+                .unwrap()
+                .title,
+            "renamed"
+        );
+        press(&shared).unwrap();
+        assert_eq!(parses(), 2);
+    }
+
+    #[test]
+    fn an_edit_that_keeps_the_source_reuses_the_plan() {
+        reset_parses();
+        let shared = live_screen(CLOCK);
+        send(&shared, "create", Some("/user/note"), Some(json!("hello"))).unwrap();
+        assert_eq!(parses(), 1);
+        press(&shared).unwrap();
+        assert_eq!(parses(), 1);
+    }
+
+    #[test]
+    fn a_rejected_source_edit_keeps_the_plan_the_events_validate_against() {
+        reset_parses();
+        let shared = live_screen(CLOCK);
+        let oversized = "x".repeat(65537);
+        assert!(send(&shared, "update", Some("/source"), Some(json!(oversized))).is_err());
+        assert_eq!(parses(), 2);
+        {
+            let state = shared.state.lock().unwrap();
+            assert_eq!(state.doc.source, CLOCK);
+            assert_eq!(state.plan.screen.as_ref().unwrap().title, "clock");
+        }
+        press(&shared).unwrap();
+        assert_eq!(parses(), 2);
     }
 }

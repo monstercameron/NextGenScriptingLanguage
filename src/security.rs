@@ -3021,12 +3021,7 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
             );
         }
         // SAFETY: both SIDs are non-null and remain live in the descriptor and token buffer.
-        if unsafe { EqualSid(owner, user.User.Sid) } == 0 {
-            bail!(
-                "security-sensitive file {} must be owned by the current user",
-                path.display()
-            );
-        }
+        let owner_is_user = unsafe { EqualSid(owner, user.User.Sid) } != 0;
 
         let mut present = 0;
         let mut acl_defaulted = 0;
@@ -3105,6 +3100,18 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
         };
         let system_sid = trusted_sid(windows_sys::Win32::Security::WinLocalSystemSid)?;
         let admins_sid = trusted_sid(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
+        // A process with an elevated administrator token creates files owned by the local
+        // Administrators group, not by the user, so the runtime could not reopen its own
+        // checkpoint there. The DACL check below already allows that group and no principal
+        // beyond the user, SYSTEM and Administrators, so accepting it as owner trusts nobody new.
+        // SAFETY: owner is non-null (checked above) and admins_sid holds a valid well-known SID.
+        if !owner_is_user && unsafe { EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) } == 0
+        {
+            bail!(
+                "security-sensitive file {} must be owned by the current user or the local Administrators group",
+                path.display()
+            );
+        }
         for index in 0..size.AceCount {
             let mut raw_ace = std::ptr::null_mut();
             // SAFETY: index is below the ACE count reported for this valid ACL.

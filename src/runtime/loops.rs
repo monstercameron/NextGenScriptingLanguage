@@ -796,4 +796,129 @@ mod tests {
         assert!(!stack.header(0, &kind, &mut bindings)?);
         Ok(())
     }
+
+    #[test]
+    fn break_through_nested_frames_keeps_outer_updates_after_cached_cleanup() -> Result<()> {
+        let mut bindings = BTreeMap::from([
+            (
+                "items".into(),
+                Value::List(vec![Value::String("a".into()), Value::String("b".into())]),
+            ),
+            ("outer".into(), Value::Integer(1)),
+        ]);
+        let each = LoopKind::ForEach {
+            binding: "item".into(),
+            values: Value::Reference("items".into()),
+        };
+        let repeat = LoopKind::Repeat {
+            count: Value::Integer(2),
+        };
+        let mut stack = LoopStack::default();
+        assert!(stack.header(0, &each, &mut bindings)?);
+        assert!(stack.header(2, &repeat, &mut bindings)?);
+        bindings.insert("inner".into(), Value::Bool(true));
+        bindings.insert("outer".into(), Value::Integer(2));
+        // Finishing the inner iteration teaches its frame the body name.
+        stack.end_iteration(2, &mut bindings)?;
+        assert!(stack.header(2, &repeat, &mut bindings)?);
+        bindings.insert("inner".into(), Value::Bool(true));
+        bindings.insert("outer".into(), Value::Integer(3));
+        // A break leaves both loops at once, with the inner one still active.
+        stack.unwind_to(0, &mut bindings)?;
+        assert_eq!(
+            bindings,
+            BTreeMap::from([
+                (
+                    "items".into(),
+                    Value::List(vec![Value::String("a".into()), Value::String("b".into())]),
+                ),
+                ("outer".into(), Value::Integer(3)),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn continue_reuses_learned_names_and_keeps_outer_updates() -> Result<()> {
+        let mut bindings = BTreeMap::from([("outer".into(), Value::Integer(0))]);
+        let kind = LoopKind::Repeat {
+            count: Value::Integer(3),
+        };
+        let mut stack = LoopStack::default();
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        bindings.insert("scratch".into(), Value::Bool(true));
+        bindings.insert("outer".into(), Value::Integer(1));
+        // Continue ends the iteration straight away after the body's first write.
+        stack.end_iteration(0, &mut bindings)?;
+        for round in 2..=3 {
+            assert!(stack.header(0, &kind, &mut bindings)?);
+            // Later iterations skip the scratch write, so the cached names are
+            // removed without a body local to find.
+            bindings.insert("outer".into(), Value::Integer(round));
+            stack.end_iteration(0, &mut bindings)?;
+            assert!(!bindings.contains_key("scratch"));
+            assert_eq!(bindings["outer"], Value::Integer(round));
+        }
+        assert_eq!(stack.frames[0].full_scans, 1);
+        assert!(!stack.header(0, &kind, &mut bindings)?);
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("outer".into(), Value::Integer(3))])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn iteration_binding_over_an_outer_name_keeps_its_diagnostic() {
+        let mut bindings = BTreeMap::from([
+            ("items".into(), Value::List(vec![Value::String("a".into())])),
+            ("item".into(), Value::String("outer".into())),
+        ]);
+        let kind = LoopKind::ForEach {
+            binding: "item".into(),
+            values: Value::Reference("items".into()),
+        };
+        let mut stack = LoopStack::default();
+        let error = stack.header(0, &kind, &mut bindings).unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "iteration binding \"item\" is already defined"
+        );
+        assert_eq!(bindings["item"], Value::String("outer".into()));
+        assert!(stack.frames.is_empty());
+    }
+
+    #[test]
+    fn restored_for_each_learns_names_then_uses_cached_cleanup() -> Result<()> {
+        let items = vec![Value::Integer(10), Value::Integer(20), Value::Integer(30)];
+        let mut bindings = BTreeMap::from([("outer".into(), Value::Integer(1))]);
+        let kind = LoopKind::ForEach {
+            binding: "item".into(),
+            values: Value::List(vec![]),
+        };
+        let mut stack = LoopStack::default();
+        stack.restore_for_each(0, "item", BTreeSet::from(["outer".into()]), items, 1)?;
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        assert_eq!(bindings["item"], Value::Integer(20));
+        bindings.insert("outer".into(), Value::Integer(2));
+        bindings.insert("scratch".into(), Value::Bool(true));
+        // The restored frame has no cache yet, so its first boundary scans.
+        stack.end_iteration(0, &mut bindings)?;
+        assert_eq!(stack.frames[0].full_scans, 1);
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("outer".into(), Value::Integer(2))])
+        );
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        assert_eq!(bindings["item"], Value::Integer(30));
+        bindings.insert("outer".into(), Value::Integer(3));
+        stack.end_iteration(0, &mut bindings)?;
+        assert_eq!(stack.frames[0].full_scans, 1);
+        assert!(!stack.header(0, &kind, &mut bindings)?);
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("outer".into(), Value::Integer(3))])
+        );
+        Ok(())
+    }
 }

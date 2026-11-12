@@ -16,6 +16,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use url::{Host, Url};
@@ -202,6 +203,9 @@ fn enforce_offline_mode(offline: bool, has_fixture: bool) -> Result<()> {
 /// A stable, sanitized diagnostic suitable for stderr and a runtime error field.
 /// Provider data, request values, paths, credentials, and error causes are omitted.
 pub fn diagnostic(error: &anyhow::Error) -> String {
+    if let Some(exhausted) = error.downcast_ref::<BudgetExhausted>() {
+        return exhausted.to_string();
+    }
     error
         .downcast_ref::<ModelFailure>()
         .map(ToString::to_string)
@@ -2946,6 +2950,244 @@ fn log_sum_exp(values: &[f64]) -> f64 {
         .ln()
 }
 
+const BUDGET_CALLS_MAX: u64 = 10_000_000;
+const BUDGET_TOKENS_MAX: u64 = 1_000_000_000_000;
+const BUDGET_SECONDS_MAX: u64 = 31_536_000;
+
+/// A per-run model budget, written `calls=50,tokens=200000,seconds=120`. Any
+/// subset of the three keys may appear once each; an absent key is unlimited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelBudget {
+    pub calls: Option<u64>,
+    pub tokens: Option<u64>,
+    pub seconds: Option<u64>,
+}
+
+/// Parse the text form of a model budget. Unknown keys, duplicate keys, empty
+/// entries, signs, spaces and values outside `1..=max` are errors.
+pub fn parse_model_budget(text: &str) -> Result<ModelBudget> {
+    let mut budget = ModelBudget::default();
+    for entry in text.split(',') {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("model budget entries must be key=value"))?;
+        let (slot, maximum) = match key {
+            "calls" => (&mut budget.calls, BUDGET_CALLS_MAX),
+            "tokens" => (&mut budget.tokens, BUDGET_TOKENS_MAX),
+            "seconds" => (&mut budget.seconds, BUDGET_SECONDS_MAX),
+            _ => bail!("model budget keys are calls, tokens and seconds"),
+        };
+        if slot.is_some() {
+            bail!("model budget keys may be given only once");
+        }
+        *slot = Some(parse_budget_value(value, maximum)?);
+    }
+    Ok(budget)
+}
+
+fn parse_budget_value(value: &str, maximum: u64) -> Result<u64> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("model budget values are positive integers");
+    }
+    let parsed: u64 = value
+        .parse()
+        .map_err(|_| anyhow!("model budget value is outside its range"))?;
+    if parsed == 0 || parsed > maximum {
+        bail!("model budget value is outside its range");
+    }
+    Ok(parsed)
+}
+
+/// The limit a refused model call hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BudgetLimit {
+    Calls,
+    Tokens,
+    Seconds,
+}
+
+impl BudgetLimit {
+    /// The key name of the limit in the budget text form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Calls => "calls",
+            Self::Tokens => "tokens",
+            Self::Seconds => "seconds",
+        }
+    }
+}
+
+/// The typed failure `model_budget_exhausted`, distinct from provider errors.
+/// Its diagnostic is the static name; the limit and amounts are read through
+/// the accessors and never carry prompt or response text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BudgetExhausted {
+    limit: BudgetLimit,
+    configured: u64,
+    used: u64,
+}
+
+impl BudgetExhausted {
+    fn new(limit: BudgetLimit, configured: u64, used: u64) -> Self {
+        Self {
+            limit,
+            configured,
+            used,
+        }
+    }
+
+    /// Which limit refused the call.
+    pub fn limit(&self) -> BudgetLimit {
+        self.limit
+    }
+
+    /// The configured amount of the refused limit.
+    pub fn configured(&self) -> u64 {
+        self.configured
+    }
+
+    /// The amount of the refused limit already used when the call was refused.
+    pub fn used(&self) -> u64 {
+        self.used
+    }
+}
+
+impl fmt::Display for BudgetExhausted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("model_budget_exhausted")
+    }
+}
+
+impl StdError for BudgetExhausted {}
+
+/// What a model call may consume, declared before the call is issued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallEstimate {
+    pub max_tokens: u64,
+}
+
+/// What is known after a call. `Reported` carries the provider's total token
+/// count from the result's `usage`. `Uncertain` means the request may have
+/// reached the provider without a usable answer, so the full reservation stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallOutcome {
+    Reported { total_tokens: u64 },
+    Uncertain,
+}
+
+/// Counts charged so far: calls reserved, tokens settled or reserved, and
+/// wall time settled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BudgetUsage {
+    pub calls: u64,
+    pub tokens: u64,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Default)]
+struct BudgetState {
+    calls: u64,
+    /// Settled token usage plus the reservations still outstanding.
+    tokens: u64,
+    settled_millis: u128,
+}
+
+/// Run-scoped model accounting, safe to share between threads. Reserve before
+/// a model call and settle after it; the seconds limit is wall time summed over
+/// settled calls, and the caller measures `elapsed` with its own clock.
+#[derive(Debug)]
+pub struct RunModelBudget {
+    limits: ModelBudget,
+    state: Mutex<BudgetState>,
+}
+
+/// Token charge held for one model call until it is settled. Dropping it
+/// without settling keeps the full charge, which is the safe default.
+#[must_use = "settle the reservation after the model call, or it keeps its full token charge"]
+#[derive(Debug)]
+pub struct Reservation<'budget> {
+    budget: &'budget RunModelBudget,
+    tokens: u64,
+}
+
+impl RunModelBudget {
+    pub fn new(limits: ModelBudget) -> Self {
+        Self {
+            limits,
+            state: Mutex::new(BudgetState::default()),
+        }
+    }
+
+    fn locked(&self) -> MutexGuard<'_, BudgetState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Count one call and reserve its `max_tokens`. A refused call changes
+    /// nothing.
+    pub fn reserve(&self, call: CallEstimate) -> Result<Reservation<'_>, BudgetExhausted> {
+        let mut state = self.locked();
+        if let Some(limit) = self.limits.calls.filter(|&limit| state.calls >= limit) {
+            return Err(BudgetExhausted::new(BudgetLimit::Calls, limit, state.calls));
+        }
+        let settled_seconds = u64::try_from(state.settled_millis / 1000).unwrap_or(u64::MAX);
+        if let Some(limit) = self
+            .limits
+            .seconds
+            .filter(|&limit| state.settled_millis >= u128::from(limit) * 1000)
+        {
+            return Err(BudgetExhausted::new(
+                BudgetLimit::Seconds,
+                limit,
+                settled_seconds,
+            ));
+        }
+        if let Some(limit) = self
+            .limits
+            .tokens
+            .filter(|&limit| state.tokens.saturating_add(call.max_tokens) > limit)
+        {
+            return Err(BudgetExhausted::new(
+                BudgetLimit::Tokens,
+                limit,
+                state.tokens,
+            ));
+        }
+        state.calls = state.calls.saturating_add(1);
+        state.tokens = state.tokens.saturating_add(call.max_tokens);
+        Ok(Reservation {
+            budget: self,
+            tokens: call.max_tokens,
+        })
+    }
+
+    /// Replace the reservation with the reported usage, or keep it whole when
+    /// the outcome is uncertain. Wall time is summed in both cases.
+    pub fn settle(&self, reservation: Reservation<'_>, outcome: CallOutcome, elapsed: Duration) {
+        assert!(
+            std::ptr::eq(reservation.budget, self),
+            "a reservation is settled on the budget that issued it"
+        );
+        let mut state = self.locked();
+        if let CallOutcome::Reported { total_tokens } = outcome {
+            state.tokens = state
+                .tokens
+                .saturating_sub(reservation.tokens)
+                .saturating_add(total_tokens);
+        }
+        state.settled_millis = state.settled_millis.saturating_add(elapsed.as_millis());
+    }
+
+    /// The amounts charged so far.
+    pub fn usage(&self) -> BudgetUsage {
+        let state = self.locked();
+        BudgetUsage {
+            calls: state.calls,
+            tokens: state.tokens,
+            seconds: u64::try_from(state.settled_millis / 1000).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use super::*;
@@ -3930,6 +4172,202 @@ mod unit_tests {
         let error = run(&args, &mut input, &mut output).unwrap_err();
         assert_eq!(diagnostic(&error), "input");
         assert!(output.is_empty());
+    }
+
+    fn budget_fixture_dir() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = fixture_test_request("source text");
+        let name = format!("{}.json", request_hash(&expected).unwrap());
+        std::fs::write(
+            temp.path().join(name),
+            json!({"expected_request": expected, "response": fixture_test_response("fixture result")})
+                .to_string(),
+        )
+        .unwrap();
+        temp
+    }
+
+    #[test]
+    fn model_budget_parses_any_subset_of_the_three_keys() {
+        assert_eq!(
+            parse_model_budget("calls=50,tokens=200000,seconds=120").unwrap(),
+            ModelBudget {
+                calls: Some(50),
+                tokens: Some(200_000),
+                seconds: Some(120),
+            }
+        );
+        assert_eq!(
+            parse_model_budget("seconds=1").unwrap(),
+            ModelBudget {
+                seconds: Some(1),
+                ..ModelBudget::default()
+            }
+        );
+        assert_eq!(
+            parse_model_budget("tokens=5,calls=2").unwrap(),
+            ModelBudget {
+                calls: Some(2),
+                tokens: Some(5),
+                seconds: None,
+            }
+        );
+    }
+
+    #[test]
+    fn model_budget_rejects_unknown_duplicate_empty_and_out_of_range_entries() {
+        for text in [
+            "",
+            "calls",
+            "calls=",
+            "calls=0",
+            "calls=-1",
+            "calls=+1",
+            "calls= 1",
+            " calls=1",
+            "calls=1 ",
+            "calls=1.5",
+            "calls=1,",
+            "calls=1,,tokens=2",
+            "cost=3",
+            "calls=1,calls=2",
+            "calls=99999999999999999999999",
+            "calls=10000001",
+            "tokens=1000000000001",
+            "seconds=31536001",
+        ] {
+            assert!(parse_model_budget(text).is_err(), "accepted {text:?}");
+        }
+    }
+
+    #[test]
+    fn ten_fixture_calls_fit_calls_ten_and_the_eleventh_is_refused() {
+        let temp = budget_fixture_dir();
+        let budget = RunModelBudget::new(parse_model_budget("calls=10").unwrap());
+        for _ in 0..10 {
+            let reservation = budget
+                .reserve(CallEstimate { max_tokens: 512 })
+                .expect("within the call budget");
+            let mut input: &[u8] = b"source text";
+            let mut output = Vec::new();
+            run(&fixture_dir_args(temp.path()), &mut input, &mut output).unwrap();
+            let result: Value = serde_json::from_slice(&output).unwrap();
+            let total_tokens = result["usage"]["total_tokens"].as_u64().unwrap();
+            budget.settle(
+                reservation,
+                CallOutcome::Reported { total_tokens },
+                Duration::from_millis(2),
+            );
+        }
+        let before = budget.usage();
+        assert_eq!(before.calls, 10);
+        let error = budget
+            .reserve(CallEstimate { max_tokens: 512 })
+            .unwrap_err();
+        assert_eq!(error.limit(), BudgetLimit::Calls);
+        assert_eq!((error.configured(), error.used()), (10, 10));
+        assert_eq!(
+            diagnostic(&anyhow::Error::from(error)),
+            "model_budget_exhausted"
+        );
+        assert_eq!(budget.usage(), before);
+    }
+
+    #[test]
+    fn parallel_reservations_that_together_exceed_tokens_never_both_succeed() {
+        for _ in 0..200 {
+            let budget = RunModelBudget::new(parse_model_budget("tokens=1000").unwrap());
+            let barrier = std::sync::Barrier::new(2);
+            let granted: usize = std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            usize::from(budget.reserve(CallEstimate { max_tokens: 600 }).is_ok())
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .sum()
+            });
+            assert_eq!(granted, 1);
+            assert_eq!(budget.usage().tokens, 600);
+        }
+    }
+
+    #[test]
+    fn settling_with_smaller_usage_frees_the_difference() {
+        let budget = RunModelBudget::new(parse_model_budget("tokens=1000").unwrap());
+        let reservation = budget.reserve(CallEstimate { max_tokens: 600 }).unwrap();
+        assert!(budget.reserve(CallEstimate { max_tokens: 500 }).is_err());
+        assert_eq!(budget.usage().tokens, 600);
+        budget.settle(
+            reservation,
+            CallOutcome::Reported { total_tokens: 100 },
+            Duration::ZERO,
+        );
+        assert_eq!(budget.usage().tokens, 100);
+        let second = budget
+            .reserve(CallEstimate { max_tokens: 900 })
+            .expect("the freed difference is reusable");
+        budget.settle(
+            second,
+            CallOutcome::Reported { total_tokens: 900 },
+            Duration::ZERO,
+        );
+        assert_eq!(budget.usage().tokens, 1000);
+    }
+
+    #[test]
+    fn an_uncertain_outcome_keeps_the_full_reservation() {
+        let budget = RunModelBudget::new(parse_model_budget("tokens=1000,seconds=60").unwrap());
+        let reservation = budget.reserve(CallEstimate { max_tokens: 600 }).unwrap();
+        budget.settle(reservation, CallOutcome::Uncertain, Duration::from_secs(3));
+        let error = budget
+            .reserve(CallEstimate { max_tokens: 500 })
+            .unwrap_err();
+        assert_eq!(error.limit(), BudgetLimit::Tokens);
+        assert_eq!((error.configured(), error.used()), (1000, 600));
+        assert_eq!(
+            budget.usage(),
+            BudgetUsage {
+                calls: 1,
+                tokens: 600,
+                seconds: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn seconds_limit_sums_settled_wall_time_from_a_fake_clock() {
+        struct FakeClock {
+            now: Duration,
+        }
+        let budget = RunModelBudget::new(parse_model_budget("seconds=10").unwrap());
+        let mut clock = FakeClock {
+            now: Duration::ZERO,
+        };
+        for step in [
+            Duration::from_secs(4),
+            Duration::from_secs(5),
+            Duration::from_millis(1500),
+        ] {
+            let reservation = budget
+                .reserve(CallEstimate { max_tokens: 1 })
+                .expect("under the wall-time limit");
+            let started = clock.now;
+            clock.now += step;
+            budget.settle(
+                reservation,
+                CallOutcome::Reported { total_tokens: 1 },
+                clock.now - started,
+            );
+        }
+        let error = budget.reserve(CallEstimate { max_tokens: 1 }).unwrap_err();
+        assert_eq!(error.limit(), BudgetLimit::Seconds);
+        assert_eq!((error.configured(), error.used()), (10, 10));
     }
 }
 

@@ -17,22 +17,22 @@ evidence, and remaining acceptance work. `partial` means narrower evidence exist
 `not implemented` and `not measured` are not passes.
 
 <!-- replacement-gates:generated:start -->
-**Ledger snapshot:** Execute `0.9.0-rc.5` at `b84d4cc883fbebeff7428bc657cc56cc2dc7782b`.
+**Ledger snapshot:** Execute `0.9.0-rc.5` at `7879a1094d9c61cd7943107cecde2e45817ec25d`.
 
 | Gate | Requirement | Status | Evidence and remaining work |
 | --- | --- | --- | --- |
 | 1 · P0 | Unix compatibility | Partial | Native pipes, binary files, cwd, signals, and PTY tests exist. No stratified 100-command differential matrix; generic CLI exit 1, finite buffering, and literal arguments differ from Bash. |
 | 2 · P0 | 1 GB real streaming | Partial | New local 1,000,000,000-byte probe verifies exact output hash, binary bytes, and two native launches. Compare a small input's high-water usage; Linux execution and broader slow-consumer/memory observations remain open. |
 | 3 · P0 | Lifecycle, 10,000 repetitions | Partial | New seven-case repeatable suite checks record cutoff, signals, timeout, blocked output, failures, and reaping. Local run: 1,000 cycles / 7,000 probes. The 10,000-cycle target, crash/descendant cases, and Linux run remain open. |
-| 4 · P0 | Complete scripting control flow | Not Implemented | Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. General conditions, loops, functions and parallel jobs remain missing. |
+| 4 · P0 | Complete scripting control flow | Not Implemented | Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. Scalar `if`/`while` conditions and loops (`docs/language.md`, Loops), same-file reusable programs, and `parallel for each` exist in source (`src/parser.rs`, `src/ast.rs`). Still missing: general jobs, external modules, and jobs inside reusable programs (`docs/language.md`), plus the documented checkpoint and pre-effect loop restrictions. |
 | 5 · P0 | 150 real Omarchy ports | Not Measured | The 150 local utilities are **not** Omarchy ports. No pinned upstream sample or disposable-desktop differential run exists. |
 | 6 · P0 | Failure semantics | Partial | Pipeline failure, timeout, cancellation, uncertain checkpoint retry, and cleanup tests exist. Numeric statuses and stderr are not structured script-visible results; recovery branches are missing. |
-| 7 · P1 | 1,000 applets across backends | Not Implemented | There are 28 shipped manifest entries plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent. |
+| 7 · P1 | 1,000 applets across backends | Not Implemented | There are 208 bundled manifest entries (`src/bundled_manifests/index.rs`) plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent. |
 | 8 · P1 | Five levels of nested programs | Not Implemented | Same-file terminal components have text ports. A `.program` cannot become an imported, typed, lifecycle-owned applet. |
 | 9 · P1 | Structured typed dataflow | Partial | Typed declared text/integer/boolean/text-list inputs now validate against native parameter contracts, with scalar argv formatting. Raw byte pipelines, text bindings and UI projections exist. Native JSON/CSV record transforms, structured streams and typed component ports remain incomplete. |
 | 10 · P1 | 1,000 concurrent operations | Not Implemented | Bounded UI workers and stale-result rejection are covered at current scale. There is no general 1,000-operation concurrency primitive or randomized acceptance run. |
 | 11 · P1 | Remote reliability | Not Implemented | A CLI such as `gh` can perform a request. Runtime-owned auth, reconnection, offline/version semantics, and fault-injected transports are absent. |
-| 12 · P1 | 20 Quickshell integrations | Not Implemented | Execute renders terminal widgets. No Quickshell bridge or twenty-widget desktop acceptance suite exists. |
+| 12 · P1 | 20 Quickshell integrations | Not Implemented | Execute renders terminal widgets. A Quickshell renderer adapter exists (`src/desktop.rs`, `QuickShellRenderer`; `desktop.quickshell` manifest). Its Wayland smoke check is still pending in `tests/desktop_acceptance.py`, and no twenty-integration acceptance suite exists. |
 | 13 · P2 | Performance and idle behavior | Partial | Warm-cache 0.6.0 local control/render measurements and historical matched Bash workloads exist. True cold-cache p95, idle-spawn guards, Linux parity, and representative end-to-end wins are unproven. |
 | 14 · P2 | AI advantage on 200 tasks | Not Measured | No held-out comparative generation study, token ledger, or repair-cost dataset. Source length and this project's successful examples do not establish productivity gains. |
 | 15 · P2 | Production/security/month of use | Partial | Private local control sockets, revision checks, tracing, bounds, and recovery tests exist. Applets retain user privileges; scoped permissions, credential policy, safe contract upgrades, and a month-long deployment study are absent. |

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "release": "0.9.0-rc.5",
-  "commit": "b84d4cc883fbebeff7428bc657cc56cc2dc7782b",
+  "commit": "7879a1094d9c61cd7943107cecde2e45817ec25d",
   "overall_claim": "not_established",
   "full_replacement_claim_allowed": false,
   "aggregation": "All critical acceptance requirements must pass; scores are not averaged.",
@@ -51,7 +51,7 @@
       "priority": "P0",
       "requirement": "Complete scripting control flow",
       "status": "not_implemented",
-      "evidence_and_gap": "Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. General conditions, loops, functions and parallel jobs remain missing."
+      "evidence_and_gap": "Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. Scalar `if`/`while` conditions and loops (`docs/language.md`, Loops), same-file reusable programs, and `parallel for each` exist in source (`src/parser.rs`, `src/ast.rs`). Still missing: general jobs, external modules, and jobs inside reusable programs (`docs/language.md`), plus the documented checkpoint and pre-effect loop restrictions."
     },
     {
       "id": 5,
@@ -72,7 +72,7 @@
       "priority": "P1",
       "requirement": "1,000 applets across backends",
       "status": "not_implemented",
-      "evidence_and_gap": "There are 28 shipped manifest entries plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent."
+      "evidence_and_gap": "There are 208 bundled manifest entries (`src/bundled_manifests/index.rs`) plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent."
     },
     {
       "id": 8,
@@ -107,7 +107,7 @@
       "priority": "P1",
       "requirement": "20 Quickshell integrations",
       "status": "not_implemented",
-      "evidence_and_gap": "Execute renders terminal widgets. No Quickshell bridge or twenty-widget desktop acceptance suite exists."
+      "evidence_and_gap": "Execute renders terminal widgets. A Quickshell renderer adapter exists (`src/desktop.rs`, `QuickShellRenderer`; `desktop.quickshell` manifest). Its Wayland smoke check is still pending in `tests/desktop_acceptance.py`, and no twenty-integration acceptance suite exists."
     },
     {
       "id": 13,

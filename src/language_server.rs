@@ -127,6 +127,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                         "documentSymbolProvider": true,
                         "foldingRangeProvider": true,
+                        "documentLinkProvider": { "resolveProvider": false },
                         "inlayHintProvider": true,
                         "codeLensProvider": { "resolveProvider": false },
                     "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
@@ -324,6 +325,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
             "textDocument/documentSymbol" => Some(document_symbols(&params, &documents)),
             "textDocument/foldingRange" => Some(folding_ranges(&params, &documents)),
+            "textDocument/documentLink" => Some(document_links(&params, &documents)),
             "textDocument/inlayHint" => Some(if inlay_hints_enabled {
                 inlay_hints(&params, &documents)
             } else {
@@ -3958,6 +3960,72 @@ fn folding_ranges_in(source: &str) -> Vec<JsonValue> {
         }
     }
     ranges
+}
+
+fn document_links(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    let Some(directory) =
+        local_file_path(uri).and_then(|path| path.parent().map(Path::to_path_buf))
+    else {
+        return json!([]);
+    };
+    json!(document_links_in(&document.text, &directory))
+}
+
+/// One link per `run program file "PATH"` (or `then program file "PATH"`) statement
+/// whose quoted path names an existing file. The path is resolved against the
+/// document's directory, as the runtime resolves it, and the link covers the text
+/// between the quotes. Paths containing a backslash are skipped because their escapes
+/// are not decoded here, and a missing file gets no link rather than a dead one.
+fn document_links_in(source: &str, directory: &Path) -> Vec<JsonValue> {
+    let words = lexical_words(source);
+    let mut links = Vec::new();
+    for index in 0..words.len().saturating_sub(3) {
+        let statement_start = index == 0 || words[index - 1].line != words[index].line;
+        if !statement_start
+            || words[index].quoted
+            || !matches!(
+                &source[words[index].text_start..words[index].text_end],
+                "run" | "then"
+            )
+            || !word_eq(source, &words, index + 1, "program")
+            || !word_eq(source, &words, index + 2, "file")
+            || !words[index + 3].quoted
+        {
+            continue;
+        }
+        let quoted = &words[index + 3];
+        let raw = source
+            .get(quoted.text_start..quoted.text_end)
+            .unwrap_or_default();
+        if raw.len() < 2 || !raw.ends_with('"') {
+            continue;
+        }
+        let literal = &raw[1..raw.len() - 1];
+        if literal.is_empty() || literal.contains('\\') || literal.contains('\0') {
+            continue;
+        }
+        let target = directory.join(literal);
+        if !target.is_file() {
+            continue;
+        }
+        let Ok(target_uri) = url::Url::from_file_path(&target) else {
+            continue;
+        };
+        links.push(json!({
+            "range": range_from_offsets(source, quoted.text_start + 1, quoted.text_end - 1),
+            "target": target_uri.as_str(),
+        }));
+    }
+    links
 }
 
 /// Inlay hints for the request's range. Only the client's opt-in (see `run_with_io`)

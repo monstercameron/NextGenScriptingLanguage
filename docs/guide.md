@@ -200,20 +200,41 @@ The command writes the rendered definition to stdout only. It does not create a
 file, install or enable a unit, load a launchd job, or start the workflow.
 Review the output and move it into the service manager's user configuration
 yourself when ready. Arguments are literal argv entries; generation uses no
-shell. Paths are resolved and validated. Any required input sourced from the
-caller environment must be supplied explicitly with `--input NAME=VALUE`, so
-the service does not depend on an interactive login environment. A stdin
-listener is rejected because the service manager does not supply a durable
-event producer.
+shell. Paths are resolved and validated. Ordinary inputs can be supplied with
+`--input NAME=VALUE`. Generation refuses `--input` for any input sourced from the
+caller environment (`from environment` or `from public environment`) and for
+secret prompt answers, because it would embed the value in the unit command line.
+Supply those values through a private answers file instead:
+
+```sh
+mkdir -p ~/.config/execute
+(umask 077 && printf '{"token": "%s"}\n' "$NIGHTLY_TOKEN" > ~/.config/execute/nightly-answers.json)
+chmod 600 ~/.config/execute/nightly-answers.json
+execute service generate systemd nightly.program \
+  --name com.example.nightly-report \
+  --answers ~/.config/execute/nightly-answers.json
+```
+
+The answers file is a JSON object whose values are text, numbers, or booleans.
+It must contain a value for every environment-sourced input, even one with a
+default, so the service does not depend on an interactive login environment.
+Generation requires the file to be owned by the current user with no group or
+other access on Unix, or to have a non-inherited owner-only ACL on Windows. The
+rendered unit contains only the path, `--answers PATH`, and the service reads the
+file when it runs, so the secret value does not appear in the unit. Keep the file
+readable only by the account that runs the service. `--input` and `--answers`
+cannot be combined. A stdin listener is rejected because the service manager does
+not supply a durable event producer.
 
 The generated systemd unit uses `Type=simple`, an explicit working directory,
 `Restart=on-failure` with a five-second delay, `KillMode=control-group`, and
 journal stdout/stderr. The launchd plist sets `ProgramArguments`,
 `WorkingDirectory`, `RunAtLoad`, and `KeepAlive` with `SuccessfulExit=false`, so
 it restarts failed runs but leaves successful completion stopped. It routes
-stdout/stderr to per-user files under `~/Library/Logs`. It does not configure an OS-level timer;
+stdout/stderr to per-user files under `~/Library/Logs`. This resident definition does not configure an OS-level timer;
 the workflow's own interval or calendar trigger runs inside the foreground
-Execute process. The upstream [systemd.service(5)](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)
+Execute process. On systemd, a cron-scheduled workflow can instead be rendered as
+a timer, described in the next section. The upstream [systemd.service(5)](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)
 and [systemd.kill(5)](https://github.com/systemd/systemd/blob/main/man/systemd.kill.xml)
 manuals describe those unit settings; Apple's archived
 [launchd job guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
@@ -230,6 +251,43 @@ requires launchd-managed programs to remain in the foreground; `KeepAlive`
 supervises the job's main process and does not promise cleanup of detached
 children. This is service startup/restart integration, not interactive-session
 or universal descendant management.
+
+### Generate a systemd timer for a cron workflow
+
+A workflow scheduled with `on schedule "<cron expression>"` can be rendered as a
+systemd timer, so the service manager starts one run at each calendar match
+instead of keeping Execute resident:
+
+```sh
+execute service generate systemd-timer nightly.program \
+  --name com.example.nightly-report \
+  --working-dir "$PWD" \
+  --manifest-dir "$PWD/manifests"
+```
+
+`systemd-timer` requires a cron trigger. A workflow with an interval (`every`)
+or a stdin listener is refused. The output is two units separated by comment
+lines. The timer unit has one `OnCalendar=` line for each calendar time the cron
+expression selects, `Persistent=false` unless you add `--persistent`, a
+`Unit=` line naming the service, and `WantedBy=timers.target`. The service unit
+is `Type=oneshot`, uses the same working directory and journal output as the
+resident unit, and runs `execute run --once` on the workflow. The generator adds
+`--once` itself; do not pass it. With `--once`, the workflow's handler runs
+immediately for that activation and Execute exits, rather than waiting for the
+next calendar tick.
+
+As the comments in the output say, save the timer as `<name>.timer` and the
+service as `<name>.service` in your service manager's user unit directory, then
+enable the timer yourself, for example with
+`systemctl --user enable --now com.example.nightly-report.timer`. Generation
+writes nothing and installs nothing.
+
+Add `--persistent` to set `Persistent=true`. systemd then runs an activation that
+was missed while the host was off, once, when the timer next starts. Without the
+flag, missed activations are not replayed. `--persistent` is accepted only with
+`systemd-timer`. Input rules are the same as for the resident service: use
+`--input` for ordinary inputs and `--answers FILE` for environment-sourced and
+secret inputs.
 
 ## Terminal apps with control flow you can read
 

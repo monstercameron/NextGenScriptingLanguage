@@ -148,9 +148,9 @@ invocation  = "run" target [ "with" argument { "and" argument } ]
             | "pipe" "to" target [ "with" argument { "and" argument } ]
 target      = TEXT | NAME                      (TEXT is a direct executable)
 argument    = NAME value | "arguments" list | "flags" list
-value       = TEXT | INTEGER | BOOL | NAME (a binding) | list
-list        = "[" [ item { "," item } ] "]"
-item        = TEXT | INTEGER | BOOL | NAME
+value       = TEXT | INTEGER | BOOL | "null" | NAME (a binding) | list | object
+list        = "[" [ value { "," value } ] "]"
+object      = "{" [ TEXT ":" value { "," TEXT ":" value } ] "}"
 suffixes    = [ "as" NAME ]
               [ "and" "discard" "stderr" ]        (direct quoted commands only)
               [ "and" "timeout" INTEGER UNIT ]
@@ -179,6 +179,28 @@ and get no reorder fix.
 
 `then` waits for the previous statement to succeed and passes its output as stdin.
 `pipe to` connects the previous stage's stdout to this command with an OS pipe.
+
+### Literal lists and objects
+
+A `value` can be a list or an object literal, and both can hold bound names. The
+parser reads every value with one routine (`parse_value_depth` in
+`src/parser.rs`). A bare identifier inside a list or object is a reference to a
+binding, and the reference is replaced with the bound value when the step runs.
+Object keys must be quoted strings, so a name cannot be a key.
+
+- A duplicate object key, a trailing comma in a list or object, and nesting
+  deeper than 64 levels are parse errors.
+- `true`, `false` and `null` are literals, not references. A name bound with
+  `as NAME` cannot be one of these words.
+- A number is read as a JSON number. An integer that fits in 64 bits is an
+  integer value, and other numbers are kept as JSON numbers.
+
+```program
+accept path as text with default "notes.txt"
+accept count as integer with default 3
+run json.stringify with value {"path": path, "count": count} as report
+then save to "summary.json"
+```
 
 ```program
 run "printf" with arguments ["a\nb\n"]

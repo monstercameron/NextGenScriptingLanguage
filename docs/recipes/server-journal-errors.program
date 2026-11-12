@@ -1,0 +1,11 @@
+# Task: show the most recent error-level journal entries without a pager.
+# Program: this file.
+# Run: execute docs/recipes/server-journal-errors.program
+#      execute docs/recipes/server-journal-errors.program --input lines=200
+# Test with fakes: put a fake `journalctl` earlier on PATH that prints its arguments. Expect
+#   -p err, -n with the line count, and --no-pager.
+# Explain: the output is journalctl's own text; the program adds nothing.
+# Replaces (Bash): journalctl -p err -n 50 --no-pager
+# Limit: reading the system journal may need membership in the adm or systemd-journal group.
+accept lines as integer with default 50
+run "journalctl" with arguments ["-p", "err", "-n", lines, "--no-pager"]

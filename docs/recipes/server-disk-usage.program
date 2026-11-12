@@ -1,0 +1,10 @@
+# Task: print disk usage for a mount point or directory in POSIX df format.
+# Program: this file.
+# Run: execute docs/recipes/server-disk-usage.program
+#      execute docs/recipes/server-disk-usage.program --input path=/var
+# Test with fakes: put a fake `df` earlier on PATH that prints its arguments. Expect
+#   -P and the path, with the default path of /.
+# Explain: the output is df's own table; the program adds nothing.
+# Replaces (Bash): df -P "${1:-/}"
+accept path as text with default "/"
+run "df" with arguments ["-P", path]

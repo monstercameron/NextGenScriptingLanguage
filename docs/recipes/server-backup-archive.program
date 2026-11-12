@@ -1,0 +1,16 @@
+# Task: create a gzip tar archive of a directory and report the result.
+# Program: this file.
+# Run: execute docs/recipes/server-backup-archive.program --input source=/srv/site --input archive=/backups/site.tar.gz
+# Test with fakes: use a temporary directory with a small file. Expect the archive to exist
+#   and the success line. Pass a missing source and expect the failure line and a failing exit.
+# Explain: this recipe has no resume. Re-running overwrites the archive from the start.
+# Replaces (Bash): tar -czf "$2" "$1" || { echo "archive failed (status $?)"; exit 1; }
+# Limit: resume support and incremental backups are not in this recipe.
+accept source as text
+accept archive as text
+run "tar" with arguments ["-czf", archive, source] and keep status as code
+if code is 0
+  run "printf" with arguments ["archived %s to %s\n", source, archive]
+otherwise
+  run "printf" with arguments ["archive failed (status %s)\n", code]
+  run "false"

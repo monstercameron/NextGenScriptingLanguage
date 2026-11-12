@@ -1,0 +1,10 @@
+# Task: send a low-urgency desktop notification with a four-second expiry.
+# Program: this file.
+# Run: execute docs/recipes/desktop-notify-message.program --input summary="Build finished"
+# Test with fakes: the notify.send applet is an injectable manifest. Point it at a fake
+#   executable that records its arguments; expect summary, urgency low and expire_ms 4000.
+# Explain: the notification has no action button. Use examples/desktop/notify-osd.program
+#   when the program must read the chosen action.
+# Replaces (Bash): notify-send -u low -t 4000 "$1"
+accept summary as text
+run notify.send with summary summary and urgency "low" and expire_ms 4000

@@ -1,0 +1,13 @@
+# Task: check whether a Debian or Ubuntu package is installed, without installing it.
+# Program: this file.
+# Run: execute docs/recipes/server-check-package.program --input package=nginx
+# Test with fakes: put a fake `dpkg` earlier on PATH. Make it exit 0 for `-s nginx` and
+#   exit 1 for `-s nosuchpkg`; expect "installed" and "not installed" lines.
+# Explain: the program only reads state. Installing is a separate effectful program.
+# Replaces (Bash): dpkg -s "$1" >/dev/null 2>&1 && echo installed || echo "not installed"
+accept package as text
+run "dpkg" with arguments ["-s", package] and keep status as code
+if code is 0
+  run "printf" with arguments ["%s is installed\n", package]
+otherwise
+  run "printf" with arguments ["%s is not installed\n", package]

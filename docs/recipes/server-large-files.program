@@ -1,0 +1,11 @@
+# Task: list regular files under a directory that are at least a given size.
+# Program: this file.
+# Run: execute docs/recipes/server-large-files.program --input directory=/var/log
+#      execute docs/recipes/server-large-files.program --input directory=/srv --input min_size=+1G
+# Test with fakes: create a temporary directory with one 2 MB file and one small file, then
+#   run with min_size=+1M and expect only the large file.
+# Explain: the output is find's own list of paths, one per line.
+# Replaces (Bash): find "$1" -type f -size "+100M" -print
+accept directory as text
+accept min_size as text with default "+100M"
+run "find" with arguments [directory, "-type", "f", "-size", min_size, "-print"]

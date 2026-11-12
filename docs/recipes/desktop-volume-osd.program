@@ -1,0 +1,10 @@
+# Task: show the volume on-screen display after a change, with raise as the default.
+# Program: this file.
+# Run: execute docs/recipes/desktop-volume-osd.program
+#      execute docs/recipes/desktop-volume-osd.program --input action=lower
+# Test with fakes: the osd.volume applet is an injectable manifest. Run it with a fake
+#   applet executable on the manifest path and check that the action value is passed through.
+# Explain: the program prints nothing; the OSD is shown by the desktop shell.
+# Replaces (Bash): the raise call of the desktop OSD helper script
+accept action as text with default "raise"
+run osd.volume with action action

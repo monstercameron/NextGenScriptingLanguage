@@ -1,0 +1,15 @@
+# Task: focus a Hyprland window by selector, such as class:firefox.
+# Program: this file.
+# Run: execute docs/recipes/desktop-focus-window.program --input selector=class:firefox
+# Test with fakes: put a fake `hyprctl` earlier on PATH that prints its arguments one per
+#   line and exits 0. Expect the arguments dispatch, focuswindow, class:firefox.
+#   Then make the fake exit 1 and expect the message and a failing exit.
+# Explain: the program prints nothing on success; the focus happens in the compositor.
+# Replaces (Bash): hyprctl dispatch focuswindow "$1"
+# Limit: this recipe does not launch the app when no window matches. Launching is a
+#   separate effectful program.
+accept selector as text
+run "hyprctl" with arguments ["dispatch", "focuswindow", selector] and keep status as code
+if code is not 0
+  run "printf" with arguments ["focus failed for %s (status %s)\n", selector, code]
+  run "false"

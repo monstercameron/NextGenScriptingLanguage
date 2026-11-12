@@ -47,6 +47,9 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 - [Widget catalog](tui-catalog.md): implemented elements and the wider design inventory.
 - [Applet manifests](../manifests): named parameters mapped directly to argv.
 - [Omarchy ports](../examples/omarchy-ports/README.md): thirty Omarchy commands as `.program` files, twenty of them compared with their Bash originals by `tools/port_compare.py`.
+- Task recipes: short, runnable `.program` files for common desktop and server jobs, each with its run line, a fake-tool test idea and the Bash it replaces.
+  - Desktop (Omarchy/Hyprland/Arch; needs those tools, not run in this environment): [focus a window](recipes/desktop-focus-window.program), [volume OSD](recipes/desktop-volume-osd.program), [notify with expiry](recipes/desktop-notify-message.program), [pacman package check](recipes/desktop-pacman-query.program).
+  - Server (Ubuntu/Linux): [rotate logs](recipes/server-rotate-logs.program), [check a package](recipes/server-check-package.program), [disk usage](recipes/server-disk-usage.program), [backup archive](recipes/server-backup-archive.program), [HTTP health check](recipes/server-http-health.program), [large files](recipes/server-large-files.program), [journal errors](recipes/server-journal-errors.program).
 
 ## Develop and evaluate
 

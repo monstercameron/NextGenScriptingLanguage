@@ -1,0 +1,14 @@
+# Task: rotate logs with logrotate using an explicit configuration and state file.
+# Program: this file.
+# Run: execute docs/recipes/server-rotate-logs.program --input config=/etc/logrotate.d/myapp.conf
+# Test with fakes: put a fake `logrotate` earlier on PATH that prints its arguments. Expect
+#   --state, the state path, then the config path. Make it exit 1 to check the failure line.
+# Explain: the program reports only a failure; logrotate writes its own messages.
+# Replaces (Bash): logrotate --state "$STATE" "$CONFIG"
+# Limit: needs the rights to read the config and write the state file, usually root.
+accept config as text with default "/etc/logrotate.conf"
+accept state_file as text with default "/var/lib/logrotate/logrotate.status"
+run "logrotate" with arguments ["--state", state_file, config] and keep status as code
+if code is not 0
+  run "printf" with arguments ["logrotate failed for %s (status %s)\n", config, code]
+  run "false"

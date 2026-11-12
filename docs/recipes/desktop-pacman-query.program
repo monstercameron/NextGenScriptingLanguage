@@ -1,0 +1,13 @@
+# Task: report whether an Arch package is installed.
+# Program: this file.
+# Run: execute docs/recipes/desktop-pacman-query.program --input package=vim
+# Test with fakes: put a fake `pacman` earlier on PATH. Make it exit 0 for `-Q vim` and
+#   exit 1 for `-Q nosuchpkg`; expect "installed" and "not installed" lines.
+# Explain: pacman's own version line goes straight to stdout; the program adds one line.
+# Replaces (Bash): pacman -Q "$1" >/dev/null 2>&1 && echo installed || echo not installed
+accept package as text
+run "pacman" with arguments ["-Q", package] and keep status as code
+if code is 0
+  run "printf" with arguments ["%s is installed\n", package]
+otherwise
+  run "printf" with arguments ["%s is not installed\n", package]

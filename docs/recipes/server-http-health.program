@@ -1,0 +1,14 @@
+# Task: check that an HTTP endpoint answers successfully within ten seconds.
+# Program: this file.
+# Run: execute docs/recipes/server-http-health.program --input url=https://example.com/healthz
+# Test with fakes: put a fake `curl` earlier on PATH that prints its arguments and exits 0.
+#   Expect -fsS, the output discard, the timeout and the URL. Exit 22 to check the failure line.
+# Explain: curl's -f makes HTTP error responses a non-zero status.
+# Replaces (Bash): curl -fsS -o /dev/null --max-time 10 "$1"
+accept url as text
+run "curl" with arguments ["-fsS", "-o", "/dev/null", "--max-time", "10", url] and keep status as code
+if code is 0
+  run "printf" with arguments ["%s is up\n", url]
+otherwise
+  run "printf" with arguments ["%s is down (curl status %s)\n", url, code]
+  run "false"

@@ -187,3 +187,87 @@ fn a_record_observer_does_not_record_an_unrelated_run_on_another_thread() {
         "the recorder must keep the observed run's group: {finished:?}"
     );
 }
+
+#[test]
+#[ignore = "suspected defect: a parallel group's branches are not offered to the replay observer (cause not traced; see report)"]
+fn a_replay_observer_still_offers_each_branch_of_a_parallel_group_in_its_own_run() {
+    let _turn = install_turn();
+    let cwd = tempfile::tempdir().unwrap();
+    let observer = Arc::new(Replaying::default());
+    let _guard = observe::install(observer.clone()).unwrap();
+
+    let program = parser::parse(
+        "parallel at most 2 as group\n  run \"printf\" with arguments [\"left\"] as first\n  run \"printf\" with arguments [\"right\"] as second\n",
+    )
+    .unwrap();
+    runtime::run(&program, &Registry::default(), &options(cwd.path())).unwrap();
+
+    let offered = observer.offered.lock().unwrap();
+    assert!(
+        offered.iter().any(|request| mentions(request, "left")),
+        "the replayer was not offered the left branch: {offered:?}"
+    );
+    assert!(
+        offered.iter().any(|request| mentions(request, "right")),
+        "the replayer was not offered the right branch: {offered:?}"
+    );
+}
+
+#[test]
+#[ignore = "suspected defect: a parallel group's branches are not recorded by the observer (cause not traced; see report)"]
+fn a_record_observer_keeps_each_branch_of_a_parallel_group_in_its_own_run() {
+    let _turn = install_turn();
+    let cwd = tempfile::tempdir().unwrap();
+    let observer = Arc::new(Recording::default());
+    let _guard = observe::install(observer.clone()).unwrap();
+
+    let program = parser::parse(
+        "parallel at most 2 as group\n  run \"printf\" with arguments [\"left\"] as first\n  run \"printf\" with arguments [\"right\"] as second\n",
+    )
+    .unwrap();
+    runtime::run(&program, &Registry::default(), &options(cwd.path())).unwrap();
+
+    let finished = observer.finished.lock().unwrap();
+    assert!(
+        finished.iter().any(|request| mentions(request, "left")),
+        "the recorder dropped the left branch: {finished:?}"
+    );
+    assert!(
+        finished.iter().any(|request| mentions(request, "right")),
+        "the recorder dropped the right branch: {finished:?}"
+    );
+}
+
+#[test]
+fn an_observer_is_removed_when_its_run_fails() {
+    let _turn = install_turn();
+    let cwd = tempfile::tempdir().unwrap();
+    let fixture = serde_json::to_string(env!("CARGO_BIN_EXE_native-fixture")).unwrap();
+    let observer = Arc::new(Recording::default());
+    {
+        let _guard = observe::install(observer.clone()).unwrap();
+        let failing =
+            parser::parse(&format!("run {fixture} with arguments [\"exit\", \"3\"]\n")).unwrap();
+        assert!(
+            runtime::run(&failing, &Registry::default(), &options(cwd.path())).is_err(),
+            "the observed run must fail"
+        );
+    }
+
+    // Dropping the guard after the failure must clear the slot for this thread.
+    let reinstall = observe::install(Arc::new(Recording::default()));
+    assert!(
+        reinstall.is_ok(),
+        "the failed run left its observer installed"
+    );
+    drop(reinstall);
+
+    let later = parser::parse("run \"printf\" with arguments [\"later\"]\n").unwrap();
+    let result = runtime::run(&later, &Registry::default(), &options(cwd.path())).unwrap();
+    assert_eq!(result.output, b"later");
+    let finished = observer.finished.lock().unwrap();
+    assert!(
+        finished.iter().all(|request| !mentions(request, "later")),
+        "a run after the failure was observed: {finished:?}"
+    );
+}

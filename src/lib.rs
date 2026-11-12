@@ -34,6 +34,8 @@ pub mod github_actions;
 pub mod graph;
 pub mod home;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod hypr_ipc;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod i18n;
 pub mod inputs;
 #[cfg(not(target_arch = "wasm32"))]

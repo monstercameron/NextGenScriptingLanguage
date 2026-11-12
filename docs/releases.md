@@ -15,9 +15,14 @@ Omarchy compatibility. See [Windows semantics](windows.md) and the
 | Windows x64 / ARM64 | `execute-VERSION-windows-x64.zip` / `windows-arm64.zip` | Real `.exe` binaries with a static CRT, without a separate VC++ redistributable. Extract the complete directory; add its `bin` directory to PATH. Not Authenticode signed. |
 | Flatpak x64 / ARM64 | `execute-VERSION-linux-x64.flatpak` / `linux-arm64.flatpak` | CLI sandbox, Freedesktop 25.08. Home files and network are permitted. Host tools and desktop services are not automatically accessible. |
 
-Every archive contains `execute-VERSION/bin/execute` and `execute-model`
-(with `.exe` on Windows). Keep both binaries together and the `manifests`
-directory beside `bin`. Native packages put the manifests under
+Every archive contains `execute-VERSION/bin/execute`, `execute-model` and
+`execute-applet` (with `.exe` on Windows). Keep all three binaries together in
+`bin`, with the `manifests` directory beside `bin`. Current packages also place
+`execute-model.sha256` and `execute-applet.sha256` beside their helpers; the
+interpreter compares a helper with its sidecar when one is present and refuses
+a malformed sidecar. The published `v0.9.0-rc.4` archives predate
+`execute-applet` and contain only `execute` and `execute-model`, so for that
+release keep those two together. Native packages put the manifests under
 `/usr/share/execute`; the binary looks for `manifests` beside its `bin` directory,
 then for `share/execute/manifests`, and never searches the working directory. Do not
 copy the historical repository `bin/execute` into release assets. The pipeline builds

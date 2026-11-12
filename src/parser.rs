@@ -4458,6 +4458,17 @@ mod tests {
         assert_eq!(call.binding.as_deref(), Some("token"));
         assert!(call.sensitive_binding);
         assert!(parse("run \"pass\" and keep secret\n").is_err());
+        // The name comes after `as`, never after the `and keep secret` suffix.
+        assert!(parse("run \"pass\" and keep secret as token\n").is_err());
+        assert!(parse("run \"pass\" as token and keep secret and keep secret\n").is_err());
+        // `secret` is not a reserved word, so it is a valid binding name.
+        let program =
+            parse("run \"pass\" with arguments [\"show\"] as secret and keep secret\n").unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!();
+        };
+        assert_eq!(call.binding.as_deref(), Some("secret"));
+        assert!(call.sensitive_binding);
     }
 
     #[test]

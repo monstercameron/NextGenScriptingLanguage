@@ -4442,9 +4442,16 @@ fn register_sensitive_group_output(
             .register(bytes, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if bytes.ends_with(b"\n") {
+            let line_text = &bytes[..bytes.len() - 1];
             redactor
-                .register(&bytes[..bytes.len() - 1], cancelled, deadline)
+                .register(line_text, cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
+            // Windows commands end their lines with CRLF; the value is the text before both.
+            if let Some(text) = line_text.strip_suffix(b"\r") {
+                redactor.register(text, cancelled, deadline).map_err(|_| {
+                    anyhow!("line {line}: could not register sensitive command output")
+                })?;
+            }
         }
     }
     if let Some(value) = &output.typed_json {

@@ -10,14 +10,11 @@ const BASE: [&str; 3] = [
     "monitor = , preferred, auto, 1",
 ];
 
+type Lines = Vec<&'static str>;
+type Case = (Lines, Lines, Lines, Vec<Decision>, Lines);
+
 /// Each case: base, user, default, expected decisions per hunk, expected composed lines.
-fn fixtures() -> Vec<(
-    Vec<&'static str>,
-    Vec<&'static str>,
-    Vec<&'static str>,
-    Vec<Decision>,
-    Vec<&'static str>,
-)> {
+fn fixtures() -> Vec<Case> {
     use Decision::{Human, KeepUser, TakeDefault};
     let b = BASE.to_vec();
     vec![

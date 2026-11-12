@@ -1374,8 +1374,126 @@ pub(crate) fn lower(raw: RawProgram) -> Result<Program> {
     reusable::finish(raw.inputs, raw.steps, raw.trigger, raw.definitions)
 }
 
+/// Syntax errors found by `parse_collecting_errors`, in the order the parser meets them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError {
+    /// The line the error names (its `line N:` prefix), or the top-level statement's line.
+    pub line: Option<usize>,
+    /// The error text, exactly as `parse` returns it (`{:#}` form).
+    pub message: String,
+}
+
+impl ParseError {
+    fn from_error(error: &anyhow::Error, fallback_line: Option<usize>) -> Self {
+        let message = format!("{error:#}");
+        let line = message_line(&message).or(fallback_line);
+        Self { line, message }
+    }
+}
+
+/// The number after the first `line N:` in an error message.
+fn message_line(message: &str) -> Option<usize> {
+    message.match_indices("line ").find_map(|(index, _)| {
+        let rest = &message[index + "line ".len()..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0 && rest[digits..].starts_with(':'))
+            .then(|| rest[..digits].parse().ok())
+            .flatten()
+    })
+}
+
+/// Upper bound on the errors `parse_collecting_errors` keeps. Errors beyond it are
+/// dropped and the report says so.
+pub const MAX_COLLECTED_ERRORS: usize = 20_000;
+
+/// Syntax errors gathered while parsing with recovery enabled.
+#[derive(Default)]
+struct Recovery {
+    errors: Vec<ParseError>,
+    truncated: bool,
+}
+
+impl Recovery {
+    fn record(&mut self, error: &anyhow::Error, fallback_line: usize) {
+        if self.errors.len() >= MAX_COLLECTED_ERRORS {
+            self.truncated = true;
+        } else {
+            self.errors
+                .push(ParseError::from_error(error, Some(fallback_line)));
+        }
+    }
+}
+
+/// Whether no recovered error has been recorded (always true without recovery).
+fn no_recovered_errors(recovery: &Option<&mut Recovery>) -> bool {
+    recovery
+        .as_deref()
+        .is_none_or(|recovery| recovery.errors.is_empty())
+}
+
+/// The first top-level line after `start`: where the failed statement's block ends.
+fn next_top_level(lines: &[SourceLine], start: usize) -> usize {
+    lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| line.indent == 0)
+        .map_or(lines.len(), |(index, _)| index)
+}
+
+/// Result of `parse_collecting_errors`.
+pub struct ParseReport {
+    /// The program. Present only when `errors` is empty.
+    pub program: Option<Program>,
+    /// Every syntax error found, in source order. The first one is the error `parse`
+    /// returns for the same source.
+    pub errors: Vec<ParseError>,
+    /// True when more errors were found than `MAX_COLLECTED_ERRORS`, and the rest were dropped.
+    pub truncated: bool,
+}
+
+/// Parse and keep going after a bad top-level statement, so that several independent
+/// syntax errors are reported in one pass. A failed statement is recorded once, and
+/// parsing resumes at the next top-level line; the lines indented under it are skipped.
+/// Errors found before the statements are parsed (line splitting, tokenizing, the
+/// trigger and handler layout) still end the pass, as they do for `parse`.
+pub fn parse_collecting_errors(source: &str) -> ParseReport {
+    let mut recovery = Recovery::default();
+    let parsed = parse_raw_with(source, Some(&mut recovery));
+    let Recovery {
+        mut errors,
+        truncated,
+    } = recovery;
+    let program = match parsed {
+        Ok(raw) if errors.is_empty() => match lower(raw) {
+            Ok(program) => Some(program),
+            Err(error) => {
+                errors.push(ParseError::from_error(&error, None));
+                None
+            }
+        },
+        Ok(_) => None,
+        Err(error) => {
+            errors.push(ParseError::from_error(&error, None));
+            None
+        }
+    };
+    ParseReport {
+        program,
+        errors,
+        truncated,
+    }
+}
+
 /// Parse one source text without lowering it.
 pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
+    parse_raw_with(source, None)
+}
+
+/// Parse one source text without lowering it. With a `recovery` sink, a failing
+/// top-level statement is recorded there and skipped. The caller must then discard
+/// the returned program whenever the sink holds errors.
+fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<RawProgram> {
     let mut statements = logical_lines(source)?;
     take_language_version(&mut statements)?;
     let mut definitions = BTreeMap::new();
@@ -1442,90 +1560,169 @@ pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
     }
     let openers = HandlerOpeners::push(&mut steps, &handlers);
     let mut cursor = 0;
+    // A failing top-level statement either ends the pass (no recovery sink) or is
+    // recorded, its partial steps dropped, and the pass resumes after its block.
+    macro_rules! skip_item {
+        ($start:expr, $steps_before:expr, $error:expr) => {{
+            let error: anyhow::Error = $error;
+            match recovery.as_deref_mut() {
+                None => return Err(error),
+                Some(recovery) => {
+                    recovery.record(&error, lines[$start].number);
+                    steps.truncate($steps_before);
+                    cursor = next_top_level(&lines, $start);
+                    continue;
+                }
+            }
+        }};
+    }
+    macro_rules! recover_item {
+        ($start:expr, $steps_before:expr, $result:expr) => {
+            match $result {
+                Ok(value) => value,
+                Err(error) => skip_item!($start, $steps_before, error),
+            }
+        };
+    }
     while cursor < lines.len() {
         if let Some(block) = handlers.iter().find(|block| block.header == cursor) {
             cursor = block.body_end;
             continue;
         }
+        let start = cursor;
+        let steps_before = steps.len();
         let line = &lines[cursor];
         let line_tokens = line.tokens(&token_arena);
         if line.indent != 0 {
-            bail!(
-                "line {}: unexpected indentation outside a trigger body",
-                line.number
+            skip_item!(
+                start,
+                steps_before,
+                anyhow!(
+                    "line {}: unexpected indentation outside a trigger body",
+                    line.number
+                )
             );
         }
         if word_is(line_tokens.first(), "define") {
             if steps.len() > openers.count {
-                bail!(
-                    "line {}: program definitions must precede executable statements",
-                    line.number
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: program definitions must precede executable statements",
+                        line.number
+                    )
                 );
             }
-            let (name, definition) = reusable::parse_definition(&block_line, &mut cursor)?;
+            let (name, definition) = recover_item!(
+                start,
+                steps_before,
+                reusable::parse_definition(&block_line, &mut cursor)
+            );
             if definitions.insert(name.clone(), definition).is_some() {
-                bail!("line {}: duplicate program {name:?}", line.number);
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!("line {}: duplicate program {name:?}", line.number)
+                );
             }
             continue;
         }
         if word_is(line_tokens.first(), "accept") {
             if steps.len() > openers.count {
-                bail!(
-                    "line {}: input declarations must precede executable statements",
-                    line.number
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: input declarations must precede executable statements",
+                        line.number
+                    )
                 );
             }
-            inputs.push(
+            let input = recover_item!(
+                start,
+                steps_before,
                 parse_input(line_tokens, line.number)
-                    .map_err(|error| anyhow!("line {}: {error:#}", line.number))?,
+                    .map_err(|error| anyhow!("line {}: {error:#}", line.number))
             );
+            inputs.push(input);
             cursor += 1;
             continue;
         }
         if is_trigger_header(line_tokens) {
             if steps.iter().any(|step| !is_trigger_setup(&step.kind)) {
-                bail!(
-                    "line {}: a trigger must follow only initial folder setup",
-                    line.number
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: a trigger must follow only initial folder setup",
+                        line.number
+                    )
                 );
             }
-            let (trigger, body_start) = parse_trigger_header(&lines, &token_arena, cursor)?;
-            let first_body = lines.get(body_start).ok_or_else(|| {
-                anyhow!(
-                    "line {}: trigger body must contain at least one indented statement",
-                    line.number
-                )
-            })?;
+            let (trigger, body_start) = recover_item!(
+                start,
+                steps_before,
+                parse_trigger_header(&lines, &token_arena, cursor)
+            );
+            let first_body = recover_item!(
+                start,
+                steps_before,
+                lines.get(body_start).ok_or_else(|| {
+                    anyhow!(
+                        "line {}: trigger body must contain at least one indented statement",
+                        line.number
+                    )
+                })
+            );
             if first_body.indent == 0 {
-                bail!("line {}: trigger body must be indented", first_body.number);
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!("line {}: trigger body must be indented", first_body.number)
+                );
             }
             let body_indent = first_body.indent;
             cursor = body_start;
             let mut body_steps = Vec::new();
-            while let Some(body_line) = lines.get(cursor) {
-                if body_line.indent == 0 {
-                    break;
+            let body = (|| -> Result<()> {
+                while let Some(body_line) = lines.get(cursor) {
+                    if body_line.indent == 0 {
+                        break;
+                    }
+                    let body_tokens = body_line.tokens(&token_arena);
+                    if is_trigger_header(body_tokens) || is_listener_event_header(body_tokens) {
+                        bail!(
+                            "line {}: nested trigger blocks are unsupported",
+                            body_line.number
+                        );
+                    }
+                    parse_statement(&block_line, &mut cursor, body_indent, &mut body_steps, 0)?;
                 }
-                let body_tokens = body_line.tokens(&token_arena);
-                if is_trigger_header(body_tokens) || is_listener_event_header(body_tokens) {
-                    bail!(
-                        "line {}: nested trigger blocks are unsupported",
-                        body_line.number
-                    );
-                }
-                parse_statement(&block_line, &mut cursor, body_indent, &mut body_steps, 0)?;
+                Ok(())
+            })();
+            if let Err(error) = body {
+                skip_item!(start, steps_before, error);
             }
             if body_steps.is_empty() {
-                bail!(
-                    "line {}: trigger body must contain at least one indented statement",
-                    first_body.number
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: trigger body must contain at least one indented statement",
+                        first_body.number
+                    )
                 );
             }
             steps.extend(body_steps);
             if let Some(extra) = lines.get(cursor) {
-                bail!(
-                    "line {}: statements after the trigger body are unsupported",
-                    extra.number
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: statements after the trigger body are unsupported",
+                        extra.number
+                    )
                 );
             }
             crate::inputs::validate(&inputs)?;
@@ -1537,12 +1734,28 @@ pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
             });
         }
         if is_listener_event_header(line_tokens) {
-            bail!(
-                "line {}: listener event header must follow `listen to ...`",
-                line.number
+            skip_item!(
+                start,
+                steps_before,
+                anyhow!(
+                    "line {}: listener event header must follow `listen to ...`",
+                    line.number
+                )
             );
         }
-        parse_statement(&block_line, &mut cursor, 0, &mut steps, 0)?;
+        recover_item!(
+            start,
+            steps_before,
+            parse_statement(&block_line, &mut cursor, 0, &mut steps, 0)
+        );
+    }
+    if !no_recovered_errors(&recovery) {
+        return Ok(RawProgram {
+            inputs,
+            steps,
+            trigger: None,
+            definitions,
+        });
     }
     if let Some(first) = handlers.first() {
         if steps.len() == openers.count {

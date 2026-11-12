@@ -237,7 +237,13 @@ Lifetime limit for the whole workflow.
 .BI \-\-drain\-timeout\-ms " N"
 Budget for an interrupt to finish running work before the run is cancelled. Default
 10000. Only with
-.BR run .
+.BR run ,
+and only for programs with an
+.B on interrupt
+block. When the budget expires, the run is cancelled as by a second interrupt:
+running work stops, cleanup bodies abort, and the
+.B on interrupt
+body is skipped.
 .TP
 .B \-h, \-\-help
 Show the command help, or with a program file and

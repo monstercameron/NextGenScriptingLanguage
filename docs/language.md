@@ -683,6 +683,16 @@ second interrupt cancels as before: running children are stopped and the
 the elements it did not start as `not_started`; a `parallel` task group with
 `join` or `race` fails instead, as it does when cancelled.
 
+The drain has a time budget that starts at the first interrupt. It defaults to
+10 seconds. `run --drain-timeout-ms N` replaces it with N milliseconds. The
+option applies only to `run` and only to programs with an `on interrupt` block;
+other programs cancel on their first interrupt. When the budget expires before
+the drain ends, the run is cancelled as if a second interrupt had arrived:
+running work is stopped, `finally`, `on exit` and `on interrupt` bodies abort
+at once, and the `on interrupt` body is skipped. The run still ends with the
+interrupting signal's status. The Windows path shares this drain state, but
+the end-to-end signal tests run only on Unix.
+
 Both blocks are unindented headers with indented bodies, appear at most once
 each, and are allowed only in one-shot programs: a triggered program
 (`every`, `on schedule`, `listen`) rejects them. A program with a handler needs

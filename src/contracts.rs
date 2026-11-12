@@ -3178,6 +3178,18 @@ impl AppletContract {
         }
     }
 
+    /// Whether a `then` edge from this applet can feed a typed stdin port
+    /// described by `input` without conversion. An applet that declares no
+    /// output, and a `bytes` input, are never rejected here.
+    pub fn then_edge_accepts(&self, input: &ValueSchema) -> bool {
+        if input.kind == OutputType::Bytes {
+            return true;
+        }
+        self.output
+            .as_ref()
+            .is_none_or(|output| output.value_schema().is_assignable_to(input))
+    }
+
     /// Schema for the typed value produced when `result_envelope` is enabled.
     /// The outcome metadata is part of this interface so callers can inspect
     /// uncertainty without guessing from the exit status.
@@ -4549,5 +4561,31 @@ mod reconciler_contract_tests {
             }),
         ));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn then_edge_checks_declared_stdout_against_a_typed_stdin() {
+        let producer: AppletContract = serde_json::from_value(json!({
+            "version":1,
+            "output":{
+                "type":"record","encoding":"json",
+                "fields":{"count":{"type":"integer"}},"required":["count"]
+            }
+        }))
+        .unwrap();
+        let text_input: ValueSchema = serde_json::from_value(json!({"type":"text"})).unwrap();
+        let bytes_input: ValueSchema = serde_json::from_value(json!({"type":"bytes"})).unwrap();
+        let record_input: ValueSchema = serde_json::from_value(json!({
+            "type":"record",
+            "fields":{"count":{"type":"integer"}},"required":["count"]
+        }))
+        .unwrap();
+
+        assert!(!producer.then_edge_accepts(&text_input));
+        assert!(producer.then_edge_accepts(&bytes_input));
+        assert!(producer.then_edge_accepts(&record_input));
+
+        let undeclared: AppletContract = serde_json::from_value(json!({"version":1})).unwrap();
+        assert!(undeclared.then_edge_accepts(&text_input));
     }
 }

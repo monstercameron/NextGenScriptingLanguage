@@ -758,6 +758,52 @@ struct SplitArguments {
     positional: Vec<String>,
 }
 
+/// Splits a cluster of single-letter flag aliases: `-vq` becomes `-v -q` when `-v` is a
+/// declared flag. A dash-led argument whose first letter is not a declared flag alias is
+/// kept as it is, so values such as `-1` stay positional. The argument after a bare option
+/// spelling is that option's value and is never split.
+fn expand_clusters(table: &FlagTable<'_>, arguments: &[String]) -> Result<Vec<String>> {
+    let is_flag = |input: &InputDeclaration| matches!(input.source, Some(InputSource::Flag { .. }));
+    let mut expanded = Vec::with_capacity(arguments.len());
+    let mut value_next = false;
+    for argument in arguments {
+        if std::mem::take(&mut value_next) {
+            expanded.push(argument.clone());
+            continue;
+        }
+        if let Some(input) = table.find(argument) {
+            value_next = !is_flag(input);
+            expanded.push(argument.clone());
+            continue;
+        }
+        let letters: Vec<char> = match argument.strip_prefix('-') {
+            Some(rest) if !rest.starts_with('-') && !rest.contains('=') => rest.chars().collect(),
+            _ => Vec::new(),
+        };
+        let leads_with_flag = letters
+            .first()
+            .is_some_and(|letter| table.find(&format!("-{letter}")).is_some_and(is_flag));
+        if letters.len() < 2 || !leads_with_flag {
+            expanded.push(argument.clone());
+            continue;
+        }
+        for letter in letters {
+            let spelling = format!("-{letter}");
+            match table.find(&spelling) {
+                Some(input) if is_flag(input) => expanded.push(spelling),
+                Some(_) => {
+                    bail!("{spelling} in {argument:?} is an option; a cluster combines flags")
+                }
+                None => bail!(
+                    "unknown flag {spelling:?} in {argument:?}; the program declares {}",
+                    table.known()
+                ),
+            }
+        }
+    }
+    Ok(expanded)
+}
+
 fn split_flags(declarations: &[InputDeclaration], arguments: &[String]) -> Result<SplitArguments> {
     let table = FlagTable::new(declarations);
     if table.is_empty() {
@@ -766,9 +812,10 @@ fn split_flags(declarations: &[InputDeclaration], arguments: &[String]) -> Resul
             positional: arguments.to_vec(),
         });
     }
+    let expanded = expand_clusters(&table, arguments)?;
     let mut found: Vec<(String, Value)> = Vec::new();
     let mut positional = Vec::new();
-    let mut remaining = arguments.iter();
+    let mut remaining = expanded.iter();
     while let Some(argument) = remaining.next() {
         // `--name=value` carries its value; a bare spelling takes the next argument.
         let (spelling, inline) = match argument.split_once('=') {

@@ -780,6 +780,7 @@
   },
   "redact.text": {
     "literals": "list<string>",
+    "require_clean": "boolean",
     "text": "string"
   },
   "sed": {

@@ -4090,6 +4090,7 @@ Phrases: "redact text"
 | --- | --- | --- | --- |
 | `text` | string | yes | Text to redact. |
 | `literals` | list of string | no | Exact values to redact wherever they occur, such as a known password or account name. Empty values are ignored. At most 256 literals of up to 65536 bytes each. |
+| `require_clean` | boolean | no | Fail with not_clean when a detectable value survives masking; the failure never echoes the input. Omitted or false returns the masked text as usual. |
 
 Example:
 

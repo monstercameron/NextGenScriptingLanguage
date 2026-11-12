@@ -594,6 +594,7 @@ fn validate_flag_spelling<'a>(
                     | InputType::Integer
                     | InputType::UnsignedInteger
                     | InputType::Usize
+                    | InputType::TextList
             ) =>
         {
             bail!(
@@ -711,15 +712,17 @@ fn split_flags(declarations: &[InputDeclaration], arguments: &[String]) -> Resul
             positional.push(argument.clone());
             continue;
         };
-        if found.iter().any(|(name, _)| *name == input.name) {
+        // A `list of text` option repeats: each occurrence adds one item, in order.
+        let earlier = found.iter().position(|(name, _)| *name == input.name);
+        if earlier.is_some() && input.kind != InputType::TextList {
             bail!("{spelling} is given more than once");
         }
-        let value = match &input.source {
+        match &input.source {
             Some(InputSource::Flag { .. }) => {
                 if inline.is_some() {
                     bail!("{spelling} takes no value");
                 }
-                Value::Bool(true)
+                found.push((input.name.clone(), Value::Bool(true)));
             }
             _ => {
                 let text = match inline {
@@ -729,10 +732,20 @@ fn split_flags(declarations: &[InputDeclaration], arguments: &[String]) -> Resul
                         .with_context(|| format!("{spelling} needs a value"))?
                         .clone(),
                 };
-                input.parse_cli(&text)?
+                if input.kind == InputType::TextList {
+                    if text.contains('\0') {
+                        bail!("input {:?} contains a NUL byte", input.name);
+                    }
+                    let item = Value::String(text);
+                    match earlier.and_then(|index| found.get_mut(index)) {
+                        Some((_, Value::List(items))) => items.push(item),
+                        _ => found.push((input.name.clone(), Value::List(vec![item]))),
+                    }
+                } else {
+                    found.push((input.name.clone(), input.parse_cli(&text)?));
+                }
             }
-        };
-        found.push((input.name.clone(), value));
+        }
     }
     Ok(SplitArguments {
         flagged: found,

@@ -3,6 +3,8 @@
 //! each input's name, type, whether it is required or its default, and its
 //! source, and shows each input's `described as` text. `--format omarchy-metadata`
 //! prints the `# omarchy:` command-metadata lines that the declarations can supply.
+//! A `# execute-description: TEXT` header in the leading comment block gives the
+//! program's purpose, shown above the usage line and in the `description` field.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
 use crate::terminal_text::{escape_controls, escape_terminal_field};
@@ -15,6 +17,9 @@ use std::path::Path;
 /// Protocol identifier of the `--json` object.
 pub const PROTOCOL: &str = "execute.help/1";
 const USAGE: &str = "usage: execute help FILE [--json | --format omarchy-metadata]";
+/// The leading-comment header that states a program's purpose.
+const DESCRIPTION_HEADER: &str = "execute-description:";
+const DESCRIPTION_WORD: &str = "execute-description";
 /// The `--format` value that prints Omarchy command-metadata comment lines.
 const OMARCHY_METADATA: &str = "omarchy-metadata";
 /// Omarchy reads its metadata from the first 80 lines of a command file.
@@ -70,7 +75,8 @@ pub fn cli_with_access(
         io::stdout().write_all(render_omarchy_metadata(&program).as_bytes())?;
         return Ok(0);
     }
-    let description = describe(&program, Path::new(file).to_string_lossy().as_ref());
+    let mut description = describe(&program, Path::new(file).to_string_lossy().as_ref());
+    description["description"] = json!(header_description(&source)?);
     if as_json {
         writeln!(
             io::stdout(),
@@ -185,9 +191,53 @@ fn source_label(source: &InputSource, public: bool) -> String {
     }
 }
 
+/// The text of the program's `# execute-description:` header, or `None` when there is
+/// no header. It is an ordinary leading comment, so the grammar is unchanged. Fail
+/// closed like the policy header: a malformed, empty or repeated header is an error,
+/// and a header below the first non-comment line is not read.
+pub fn header_description(source: &str) -> Result<Option<String>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let mut headers = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed.starts_with('#') {
+            break;
+        }
+        if let Some(rest) = description_rest(trimmed) {
+            headers.push(rest.trim().to_owned());
+        } else if trimmed.contains(DESCRIPTION_WORD) {
+            bail!("malformed `# {DESCRIPTION_HEADER}` header: {trimmed}");
+        }
+    }
+    match headers.as_slice() {
+        [] => Ok(None),
+        [single] if single.is_empty() => {
+            bail!("`# {DESCRIPTION_HEADER}` needs text after the colon")
+        }
+        [single] => Ok(Some(single.clone())),
+        _ => bail!("more than one `# {DESCRIPTION_HEADER}` header in the leading comments"),
+    }
+}
+
+fn description_rest(comment: &str) -> Option<&str> {
+    comment
+        .strip_prefix('#')?
+        .trim_start()
+        .trim_start_matches('#')
+        .trim_start()
+        .strip_prefix(DESCRIPTION_HEADER)
+}
+
 fn render_text(description: &Value) -> String {
+    let mut text = String::new();
+    if let Some(purpose) = description["description"].as_str() {
+        text.push_str(&format!("{}\n\n", escape_terminal_field(purpose)));
+    }
     let usage = escape_terminal_field(description["usage"].as_str().unwrap_or(""));
-    let mut text = format!("{usage}\n");
+    text.push_str(&format!("{usage}\n"));
     let inputs = description["inputs"]
         .as_array()
         .cloned()
@@ -451,5 +501,49 @@ mod tests {
         let problems = super::omarchy_metadata_problems(&late, &program);
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("first 80 lines"), "{problems:?}");
+    }
+
+    #[test]
+    fn description_header_is_read_from_the_leading_comment_block_only() {
+        let source = "#!/usr/bin/env execute\n# execute-description: Switch the theme\n\
+                      # Purpose: an older comment\naccept name as text\n\
+                      # execute-description: below the code is not read\n";
+        assert_eq!(
+            super::header_description(source).unwrap().as_deref(),
+            Some("Switch the theme")
+        );
+        let late = "accept name as text\n# execute-description: too late\n";
+        assert_eq!(super::header_description(late).unwrap(), None);
+        assert_eq!(
+            super::header_description("accept name as text\n").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn description_header_fails_closed_on_malformed_empty_or_repeated_headers() {
+        let malformed = "# execute-description Switch the theme\n";
+        assert!(super::header_description(malformed).is_err());
+        let empty = "# execute-description:   \n";
+        assert!(super::header_description(empty).is_err());
+        let repeated = "# execute-description: one\n## execute-description: two\n";
+        assert!(super::header_description(repeated).is_err());
+    }
+
+    #[test]
+    fn text_help_prints_the_description_above_the_usage_line() {
+        let description = json!({
+            "description": "Switch the desktop theme",
+            "usage": "execute theme.program [--input NAME=VALUE ...] [-- OPTIONS]",
+            "inputs": []
+        });
+        let rendered = render_text(&description);
+        assert!(
+            rendered.starts_with(
+                "Switch the desktop theme\n\nexecute theme.program [--input NAME=VALUE ...] [-- OPTIONS]\n"
+            ),
+            "{rendered:?}"
+        );
+        assert!(rendered.contains("Inputs: none"));
     }
 }

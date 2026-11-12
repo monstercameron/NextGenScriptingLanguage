@@ -14,9 +14,8 @@ fn undefined_result_errors(source: &str) -> Vec<Diagnostic> {
 }
 
 fn example_source(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join(name);
+    // Program text only: nothing here runs an example binary.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("examples/{name}"));
     std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
 }

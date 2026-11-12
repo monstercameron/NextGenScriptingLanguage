@@ -17,7 +17,12 @@ pub mod contracts;
 #[cfg(all(feature = "desktop", not(target_arch = "wasm32")))]
 pub mod desktop;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod desktop_entry;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod diagnostics;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod doctor;
+pub mod format;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "tooling")]
 pub mod discovery;
@@ -28,7 +33,11 @@ pub mod github_actions;
 #[cfg(feature = "graph")]
 pub mod graph;
 pub mod home;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod i18n;
 pub mod inputs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lua_config;
 pub mod manifest;
 pub(crate) mod model_schema;
 #[cfg(not(target_arch = "wasm32"))]
@@ -36,6 +45,8 @@ pub(crate) mod model_schema;
 pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod modules;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod named_state;
 pub mod parser;
 pub mod privilege;
 pub mod program_files;
@@ -55,6 +66,10 @@ pub mod repl;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "records")]
 pub mod replay;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod redact;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod restart_required;
 #[cfg_attr(target_arch = "wasm32", path = "browser.rs")]
 pub mod runtime;
 #[cfg(not(target_arch = "wasm32"))]
@@ -71,6 +86,8 @@ mod structured;
 pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sysfacts;
 pub mod terminal_text;
 pub mod working_dir;
 

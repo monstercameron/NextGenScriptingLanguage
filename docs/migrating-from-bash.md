@@ -65,7 +65,7 @@ run "printf" with arguments ["%s records\n", count]
 | Unquoted `$x` splitting into words | Not applicable. Each argument is exact bytes. | by design | Spaces, newlines and empty strings survive. Use a list for several arguments. |
 | `IFS=` | None. | by design | Nothing is split, so there is no separator to set. |
 | `*.log` globbing in arguments | Use `fs.glob`. Glob patterns are not expanded in `run` arguments. | applet | `*`, `?`, `[...]` and a `**` component work. There is no escape syntax. |
-| `$'...'` ANSI-C quoting | TEXT escapes only. | partial | Escapes outside the TEXT form are not provided. |
+| `$'...'` ANSI-C quoting | TEXT escapes only. | partial | Escapes outside the TEXT form are not provided. <!-- feature: ansi_quote --> |
 
 ```program
 accept name as text
@@ -85,17 +85,17 @@ for each f in files
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
 | `x=value` | `use value "value" as x` | supported | Text, integer, boolean, list and JSON literals all bind with `as`. |
-| `$1` | `accept first as text from argument 1` | supported | Argument 1 is the first. |
+| `$1` | `accept first as text from argument 1` | supported | Argument 1 is the first. <!-- feature: positional_arguments --> |
 | `"$@"` | `accept items as list of text from arguments` | supported | Each item is one argument. |
-| `$HOME`, `$VAR` | `accept home as text from environment "HOME"` | supported | Environment values are declared inputs, not ambient names. |
+| `$HOME`, `$VAR` | `accept home as text from environment "HOME"` | supported | Environment values are declared inputs, not ambient names. <!-- feature: environment_variable --> |
 | `read -p "prompt" x` | `accept x as text from prompt "..."` | supported | Use `from secret prompt "..."` to hide the answer. |
 | `${x:-default}` for an input | `accept x as text with default "default"` | supported | |
-| `${x:-default}` for a value | `run text.default_if_empty with text x and default "default" as y` | applet | Returns the default only when the text has zero bytes. A space is not empty. |
-| `local x` | Bindings inside a reusable program. | partial | Scope is the reusable program, not a shell function. |
+| `${x:-default}` for a value | `run text.default_if_empty with text x and default "default" as y` | applet | Returns the default only when the text has zero bytes. A space is not empty. <!-- feature: parameter_expansion --> |
+| `local x` | Bindings inside a reusable program. | partial | Scope is the reusable program, not a shell function. <!-- feature: local_variable --> |
 | `arr=(a b c)` | `use value ["a", "b", "c"] as arr` | supported | Lists are values. Iterate them with `for each`. |
 | `"${arr[@]}"` | `for each item in arr`, or pass a declared list of text as the argument list. | supported | |
 | `${#arr[@]}` | None. | missing | No length or count form is documented. |
-| `declare -A map` | `use value {...} as map`, read with `take` at a JSON Pointer. | partial | Keys are fixed JSON Pointers. There is no grammar form for a computed key. |
+| `declare -A map` | `use value {...} as map`, read with `take` at a JSON Pointer. | missing | Workaround only: keys are fixed JSON Pointers. There is no form for a computed key. <!-- feature: associative_array --> |
 | `shift` | Declare each argument, or iterate the list. | partial | Positional names are fixed at declaration. |
 
 ```program
@@ -142,8 +142,8 @@ then encode settings as json
 | `[ -n "$x" ]` | `if x is not ""` | supported | |
 | `[[ a < b ]]`, numeric compare | `run number.compare ...` | applet | Returns -1, 0 or 1. Inspect it for parameter names. |
 | `[[ s == pat* ]]` | `if s contains "text"` for a substring. | partial | Conditions do not match glob patterns. |
-| `[[ s =~ regex ]]` | `run "grep" with arguments [...] and keep status as found` | partial | No regex operator. `text.matches` takes a literal needle. Use the native grep. |
-| `if cmd; then ... elif ...; fi` | `if run "cmd" ... succeeds` with `otherwise if` | supported | |
+| `[[ s =~ regex ]]` | `run "grep" with arguments [...] and keep status as found` | partial | No regex operator. `text.matches` takes a literal needle. Use the native grep. <!-- feature: regex_match --> |
+| `if cmd; then ... elif ...; fi` | `if run "cmd" ... succeeds` with `otherwise if` | supported | <!-- feature: conditional --> |
 | `case $x in ...` | `accept x as text one of [...]` with an `if` and `otherwise if` chain. | partial | No case statement, and no glob patterns in arms. |
 | `command -v tool` | None. | missing | In a command condition a missing executable is an error, not false. Probe the expected path with `fs.test` instead. |
 | `while [[ a == b ]]` | `while a is b` | supported | Scalar operands only. |
@@ -169,10 +169,10 @@ otherwise
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `for x in a b c` | `for each x in ["a", "b", "c"]` | supported | |
+| `for x in a b c` | `for each x in ["a", "b", "c"]` | supported | <!-- feature: loop --> |
 | `for x in $(cmd)` | `run text.lines with text listing as items`, then `for each`. | applet | `text.lines` splits on LF and drops one final terminator. |
 | `for ((i=0; i<n; i++))` | `repeat N times`, or `for each` over a list. | partial | `repeat` has no counter binding. |
-| `while read line; do ...; done < file` | `read "file"`, `then text.lines as lines`, `for each line in lines`. | applet | Whole-file read. For a large or unbounded stream, use `listen`. |
+| `while read line; do ...; done < file` | `read "file"`, `then text.lines as lines`, `for each line in lines`. | applet | Whole-file read. For a large or unbounded stream, use `listen`. <!-- feature: read_builtin --> |
 | `while read line` from stdin | `listen to stdin` and `whenever a line arrives as message` | supported | Runs the body once per record. |
 | `break`, `continue` | `break`, `continue` | supported | Valid only inside a loop. |
 | `while true; do ...; sleep 5; done` | `every 5 seconds` | supported | A persistent service with a monotonic interval. |
@@ -206,7 +206,7 @@ every 5 seconds
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `f() { ...; }` | `define a program named f` with its own `accept` lines. | supported | Declare it before the root statements. |
+| `f() { ...; }` | `define a program named f` with its own `accept` lines. | supported | Declare it before the root statements. <!-- feature: function_definition --> |
 | `f arg` | `run program f with name arg` | supported | Inputs are explicit. There are no ambient variables. |
 | `result=$(f arg)` | `run program f with name arg as result` | supported | |
 | `return N` | `return VALUE` in a reusable program. | partial | `return` is valid only in a program defined in the same file. |
@@ -231,7 +231,7 @@ run program label with name "app"
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `$((a + b))` | `run number.add ...` | applet | No arithmetic operators in the grammar, on purpose. Operands are JSON numbers. Inspect `number.add` for parameter names. |
+| `$((a + b))` | `run number.add ...` | applet | No arithmetic operators in the grammar, on purpose. Operands are JSON numbers. Inspect `number.add` for parameter names. <!-- feature: arithmetic --> |
 | `$((a - b))`, `$((a * b))`, `$((a / b))` | `number.subtract`, `number.multiply`, `number.divide` | applet | Division by zero fails. Fractional results use binary64, so decimals are not exact. |
 | `((i++))` | `number.add` with the next value, then bind the result. | applet | |
 | `${x#prefix}`, `${x%suffix}` | `text.strip_prefix`, `text.strip_suffix` | applet | Removes one literal matching end. There are no glob patterns. |
@@ -262,11 +262,11 @@ Execute already holds, use `then parse json as NAME` and `take`.
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `x=$(cmd)` | `run "cmd" with arguments [...] as x` | supported | The binding is the stdout text, including its trailing newline. |
+| `x=$(cmd)` | `run "cmd" with arguments [...] as x` | supported | The binding is the stdout text, including its trailing newline. <!-- feature: command_substitution --> |
 | Nested `$(...)` | One binding per command, in statement order. | supported | Execute has no nested expression. |
 | `mktemp` | `with temporary file as tmp` | supported | The file is removed when the block ends, even after a failure. |
 | `mktemp -d` | `with temporary directory as dir` | supported | Owner-only and removed on exit. |
-| `<(cmd)` process substitution | Save each stream to a temporary file, then pass the paths. | partial | There is no FIFO form. See the example below. |
+| `<(cmd)` process substitution | Save each stream to a temporary file, then pass the paths. | missing | There is no FIFO form. See the example below. <!-- feature: process_substitution --> |
 
 ```program
 run "git" with arguments ["rev-parse", "HEAD"] as head
@@ -295,9 +295,9 @@ with temporary file as left
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `cmd1 \| cmd2` | `run "cmd1" ...`, then `pipe to "cmd2" ...` | supported | Both stages run at once, connected by an OS pipe. |
+| `cmd1 \| cmd2` | `run "cmd1" ...`, then `pipe to "cmd2" ...` | supported | Both stages run at once, connected by an OS pipe. <!-- feature: pipeline --> |
 | `cmd1 \| cmd2` where `cmd2` needs the text | `then "cmd2" ...` | supported | `then` waits for success and passes complete output as stdin. |
-| `cmd > file` | `then save to "file"` | supported | Atomically replaces the file with the pipeline value. |
+| `cmd > file` | `then save to "file"` | supported | Atomically replaces the file with the pipeline value. <!-- feature: redirection --> |
 | `cmd >> file` | `then append to "file"` | supported | |
 | `cmd 2> file` | `and stderr to "file"` | supported | |
 | `cmd 2>/dev/null` | `and discard stderr` | supported | Direct executables only. |
@@ -305,7 +305,7 @@ with temporary file as left
 | `cmd >&2` | `and stdout to stderr` | supported | |
 | `cmd < file` | `and stdin from "file"` | supported | |
 | `cmd <<< "text"` | `use value "text"`, then the command. | supported | |
-| `cat <<EOF` with a quoted body | `use value """`, body, `"""`, then the command. | partial | The body is literal. Values that Bash would expand must be bound separately. |
+| `cat <<EOF` with a quoted body | `use value """`, body, `"""`, then the command. | partial | The body is literal. Values that Bash would expand must be bound separately. <!-- feature: heredoc --> |
 | `exec 3>file` and numbered descriptors | None. | missing | Use `stderr` and `stdout` suffixes instead. |
 | `PIPESTATUS` | None. | missing | Each stage's status is not bound. |
 
@@ -355,12 +355,12 @@ run pwd
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `cmd &` | `spawn as name` with the command, then `await name` | supported | The job is owned by the run and must be awaited or cancelled before scope exit. |
+| `cmd &` | `spawn as name` with the command, then `await name` | partial | The job is owned by the run and must be awaited or cancelled before scope exit. <!-- feature: background_job --> |
 | `wait $pid` | `await name` | supported | Returns the captured stdout and the status when kept. |
 | `kill $pid` for an owned job | `cancel name` | supported | Cancels only that job. |
 | `jobs`, `$!`, process ids | `inspect name as state` | supported | The record includes each stage's pid, state and status. |
 | `nohup cmd &` | `launch detached "cmd" with arguments [...]` | partial | The run does not wait for or own the child. It produces no pipeline data. |
-| `exec cmd` | `hand over to "cmd" with arguments [...]` | partial | Must be the last statement. On Windows the child runs in a job object. |
+| `exec cmd` | `hand over to "cmd" with arguments [...]` | partial | Must be the last statement. On Windows the child runs in a job object. <!-- feature: exec_builtin --> |
 | `timeout 5 cmd` | `and timeout 5 seconds` | supported | |
 | Retry loop around a command | `and retry up to 3 times with backoff 2 seconds doubling` | supported | Retries only retry-safe commands unless `even if uncertain` is given. |
 | `VAR=x cmd` | `and environment {"VAR": "x"}` | supported | |
@@ -401,7 +401,7 @@ run "tool" with arguments ["--check"] and environment {"LOG_LEVEL": "debug"}
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
 | `trap cmd EXIT` | `on exit` with an indented body | supported | Runs on normal completion, `exit`, `fail` and error. |
-| `trap cmd INT`, `TERM`, `HUP`, `QUIT` | `on interrupt` with an indented body | partial | Covers SIGINT, SIGTERM, SIGQUIT and SIGHUP on Unix, and Ctrl-C on Windows. Other signals have no form. |
+| `trap cmd INT`, `TERM`, `HUP`, `QUIT` | `on interrupt` with an indented body | partial | Covers SIGINT, SIGTERM, SIGQUIT and SIGHUP on Unix, and Ctrl-C on Windows. Other signals have no form. <!-- feature: trap --> |
 | `trap '' SIGPIPE` and other ignores | None. | missing | |
 | Cleanup after a failing block | `try` with `finally` | supported | The `finally` body runs after a failure in the block. |
 
@@ -415,9 +415,9 @@ run "printf" with arguments ["working\n"]
 
 | Bash idiom | Execute form | Status | Notes |
 | --- | --- | --- | --- |
-| `source file`, `. file` | `run program file "file" with name value as result` | partial | Runs in process with explicit inputs. Shell variables do not cross the boundary. |
+| `source file`, `. file` | `run program file "file" with name value as result` | partial | Runs in process with explicit inputs. Shell variables do not cross the boundary. <!-- feature: source --> |
 | `source /etc/os-release` | `read "/etc/os-release"`, `then env.load as osrelease`, `take text at "/ID" from osrelease as distro` | applet | `env.load` reads `KEY=VALUE` files without running them. |
-| `eval` | None. | missing | Write the command as a program. |
+| `eval` | None. | missing | Write the command as a program. <!-- feature: eval --> |
 | `flock file cmd` | `execute run FILE --single-instance LOCK` | partial | A run option that refuses to start while another run holds the lock. It is not a per-statement lock. |
 | `sudo cmd` | `run "sudo" with arguments ["-n", ...] and keep status as NAME` | partial | Privileged steps are flagged. A capability policy with `deny_privileged` refuses them. Closed stdin means a password prompt cannot be answered. |
 
@@ -456,7 +456,7 @@ These idioms are absent by design or not yet implemented. The Execute route is i
 | Regex matching | `grep` or another native matcher | partial | Listed above. |
 | `select` menus | None. | missing | |
 | Associative arrays with computed keys | JSON objects read by pointer | partial | Listed above. |
-| Coprocesses (`coproc`) | `listen` or stream forms | missing | |
+| Coprocesses (`coproc`) | `listen` or stream forms | missing | <!-- feature: coproc --> |
 | Process substitution as FIFOs | Temporary files | partial | Listed above. |
 
 ## Walkthroughs

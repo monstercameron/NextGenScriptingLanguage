@@ -772,6 +772,14 @@ def summary_table(report: dict) -> str:
     return "\n".join(lines)
 
 
+def feature_table() -> dict:
+    """The FEATURES table as JSON-ready data: feature name -> category and Execute form."""
+    return {
+        name: {"category": category, "execute": execute}
+        for name, (category, execute) in sorted(FEATURES.items())
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--inventory", default=DEFAULT_INVENTORY)
@@ -779,7 +787,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkout", default=None)
     parser.add_argument("--manifests", default=DEFAULT_MANIFESTS)
     parser.add_argument("--json", default=None, help="write the full JSON report to this path")
+    parser.add_argument(
+        "--features-json",
+        default=None,
+        help="write only the FEATURES table to this path and exit (used by the migration guide check)",
+    )
     args = parser.parse_args(argv)
+    if args.features_json:
+        with open(args.features_json, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(feature_table(), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        return 0
     report = build_report(args)
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as handle:

@@ -72,6 +72,7 @@ impl Replayer {
     /// Open a record for replay under the given registry. Declared secrets present
     /// in the environment are registered first, so recorded redactions match.
     pub fn new(record: StoredRecord, registry: &Registry, until: Option<usize>) -> Result<Self> {
+        refuse_task_groups(&record)?;
         let environment = std::env::vars_os().collect::<Vec<_>>();
         security::register_declared_environment_secrets(registry, &environment)
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
@@ -267,6 +268,39 @@ pub fn unsupported_reason(program: &Program) -> Option<&'static str> {
     None
 }
 
+/// The line of the first statement that holds a parallel or race task group, in
+/// the top-level steps or in a reusable program's steps.
+pub fn task_group_line(program: &Program) -> Option<usize> {
+    let holds = |steps: &[crate::ast::Step]| {
+        steps
+            .iter()
+            .find(|step| format!("{:?}", step.kind).contains("TaskGroup"))
+            .map(|step| step.line)
+    };
+    holds(&program.steps).or_else(|| {
+        program
+            .definitions
+            .values()
+            .find_map(|definition| holds(&definition.steps))
+    })
+}
+
+/// Refuse to replay a recorded program with a parallel or race task group. Their
+/// results arrive in completion order, which the sequential replay cursor cannot
+/// follow (issue #690). Recording such a program is still allowed.
+fn refuse_task_groups(record: &StoredRecord) -> Result<()> {
+    let source = record.program_source()?;
+    let text = std::str::from_utf8(&source).context("the recorded program is not UTF-8")?;
+    let program = crate::program_files::parse_source_resolved(&record.program_path(), text, None)
+        .context("parsing the recorded program for replay")?;
+    match task_group_line(&program) {
+        Some(line) => bail!(
+            "replay does not support parallel or race task groups (line {line}): their completion order is not deterministic"
+        ),
+        None => Ok(()),
+    }
+}
+
 /// The record's program copy, for replay without an explicit `--program`.
 pub fn stored_program_path(record: &Path) -> std::path::PathBuf {
     record.join(crate::record::PROGRAM_FILE)
@@ -314,6 +348,7 @@ impl PrefixReplayer {
     /// present in the environment are registered first, so recorded redactions
     /// match.
     pub fn new(record: StoredRecord, registry: &Registry, boundary: usize) -> Result<Self> {
+        refuse_task_groups(&record)?;
         let environment = std::env::vars_os().collect::<Vec<_>>();
         security::register_declared_environment_secrets(registry, &environment)
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
@@ -595,5 +630,28 @@ mod tests {
             let program = crate::parser::parse(source).unwrap();
             assert!(unsupported_reason(&program).is_some(), "{source}");
         }
+    }
+
+    #[test]
+    fn task_groups_record_but_replay_refuses_them_with_their_line() {
+        let group = [
+            "parallel at most 2 as results\n  run number.add with left 20 and right 22 as sum\n",
+            "race at most 2 as winner\n  run number.add with left 20 and right 22 as sum\n",
+        ];
+        for source in group {
+            let program = crate::parser::parse(source).unwrap();
+            // Record side: a task-group program is still accepted for recording.
+            assert_eq!(unsupported_reason(&program), None, "{source}");
+            // Replay side: the group is found on its statement line and refused.
+            assert_eq!(task_group_line(&program), Some(1), "{source}");
+        }
+        let nested = crate::parser::parse(
+            "define a program named worker\n  parallel at most 2 as results\n    run number.add with left 20 and right 22 as sum\nrun program worker as result\nuse value result\n",
+        )
+        .unwrap();
+        assert_eq!(unsupported_reason(&nested), None);
+        assert_eq!(task_group_line(&nested), Some(2));
+        let sequential = crate::parser::parse("run \"true\"\n").unwrap();
+        assert_eq!(task_group_line(&sequential), None);
     }
 }

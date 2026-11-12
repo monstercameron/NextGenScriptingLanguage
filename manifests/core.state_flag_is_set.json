@@ -1,0 +1,62 @@
+{
+  "name": "state.flag_is_set",
+  "description": "Answers whether a named flag is set in the execute state directory. Returns a boolean and creates nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Flag name: one or more slash-separated segments of ASCII letters, digits, '-', '_' or '.'. Segments may not be '.' or '..'."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "state.flag_is_set"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "state flag is set"
+  ]
+}

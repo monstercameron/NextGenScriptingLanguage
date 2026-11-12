@@ -1,0 +1,62 @@
+{
+  "name": "sys.facts",
+  "description": "Returns one record of machine facts read from system files: DMI identity (vendor, product, board, chassis), CPU identity and flags, battery and lid state, and PCI display devices. Missing files give null or empty fields. Reads only files below root and executes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "root": {
+      "type": "path",
+      "description": "Optional absolute directory that stands in for the root of the filesystem, for tests and chroots. Omitted reads the live system under /."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "sys.facts"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "root": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "system facts",
+    "machine facts"
+  ]
+}

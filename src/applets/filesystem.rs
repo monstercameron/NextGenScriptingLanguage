@@ -333,6 +333,292 @@ pub(super) fn realpath(
     }))
 }
 
+/// `fs.copy`: copy one regular file from `from` to `to`. Safe defaults:
+/// a source that is a symbolic link is refused unless `follow` is true, and
+/// the source must otherwise be a regular file. An existing destination is
+/// refused unless `overwrite` is true; a destination that is a directory or a
+/// symbolic link is always refused; source and destination naming the same
+/// file are refused before the destination is opened for writing.
+///
+/// Without `overwrite` the destination is created with create-new semantics,
+/// so a file that appears in the meantime is never clobbered. A reader may see
+/// the partial file until the copy finishes, and a failed copy removes what it
+/// created. With `overwrite` the bytes go to a temporary sibling that is synced
+/// and then renamed over the destination, so a reader never sees a partial file
+/// and a failed copy leaves the old destination intact. The copy streams in
+/// chunks with a budget check between them. On Unix the source's permission
+/// bits are applied to the new file, never its setuid, setgid or sticky bits.
+/// The destination lock and the path checks are those `fs.write_atomic` uses.
+/// The result is `{from, to, bytes_copied, replaced}`.
+pub(super) fn copy(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let from = resolve_path(required_string(args, "from")?, cwd);
+    let to = resolve_path(required_string(args, "to")?, cwd);
+    let _ = result_path(&from)?;
+    let _ = result_path(&to)?;
+    let follow = optional_bool(args, "follow", false)?;
+    let overwrite = optional_bool(args, "overwrite", false)?;
+    // Refuse before the destination lock file is opened, since that lock file
+    // is created beside the destination. The check is repeated under the lock.
+    copy_preflight(&from, &to, follow, overwrite, context)?;
+    let lock_path = lock_path(args, &to, cwd)?;
+    validate_lock_path(&lock_path, &to)?;
+    let lock_timeout = lock_timeout(args)?;
+
+    with_path_lock(&lock_path, lock_timeout, context, || {
+        copy_locked(&from, &to, follow, overwrite, context)
+    })
+}
+
+/// Every refusal `fs.copy` makes before it writes. It runs before the
+/// destination lock is taken and again under the lock, so a change in between
+/// is still refused. Returns the canonical source path and whether a
+/// destination exists.
+fn copy_preflight(
+    from: &Path,
+    to: &Path,
+    follow: bool,
+    overwrite: bool,
+    context: &ExecutionContext<'_>,
+) -> Result<(PathBuf, bool), AppletError> {
+    context.checkpoint()?;
+    let link = fs::symlink_metadata(from)
+        .map_err(|error| io_error(error, format!("checking {}", from.display())))?;
+    if link.file_type().is_symlink() && !follow {
+        return Err(invalid(format!(
+            "refusing to copy symbolic link {} without follow",
+            from.display()
+        )));
+    }
+    context.checkpoint()?;
+    let open_path = fs::canonicalize(from)
+        .map_err(|error| io_error(error, format!("resolving {}", from.display())))?;
+    let metadata = fs::metadata(&open_path)
+        .map_err(|error| io_error(error, format!("checking {}", from.display())))?;
+    if !metadata.is_file() {
+        return Err(invalid(format!(
+            "source is not a regular file: {}",
+            from.display()
+        )));
+    }
+    context.checkpoint()?;
+    let destination = match fs::symlink_metadata(to) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error(error, format!("checking {}", to.display()))),
+    };
+    if let Some(existing) = destination.as_ref() {
+        if existing.file_type().is_symlink() {
+            return Err(invalid(format!(
+                "refusing to write through symbolic link {}",
+                to.display()
+            )));
+        }
+        if existing.is_dir() {
+            return Err(invalid(format!(
+                "destination is a directory: {}",
+                to.display()
+            )));
+        }
+        if same_file(&open_path, &metadata, to, existing)? {
+            return Err(invalid(format!(
+                "source and destination are the same file: {}",
+                to.display()
+            )));
+        }
+        if !overwrite {
+            return Err(failed(
+                "conflict",
+                format!("destination already exists: {}", to.display()),
+            ));
+        }
+    }
+    Ok((open_path, destination.is_some()))
+}
+
+/// Whether two existing paths name one file. On Unix this compares device and
+/// inode. Elsewhere the standard library has no stable file identity, so the
+/// canonical paths are compared instead; a hard link to the source is not
+/// detected there.
+fn same_file(
+    source: &Path,
+    source_metadata: &fs::Metadata,
+    destination: &Path,
+    destination_metadata: &fs::Metadata,
+) -> Result<bool, AppletError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = (source, destination);
+        Ok(source_metadata.dev() == destination_metadata.dev()
+            && source_metadata.ino() == destination_metadata.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source_metadata, destination_metadata);
+        let resolved = fs::canonicalize(destination)
+            .map_err(|error| io_error(error, format!("resolving {}", destination.display())))?;
+        Ok(resolved == source)
+    }
+}
+
+/// The copy itself, run while the destination lock is held.
+fn copy_locked(
+    from: &Path,
+    to: &Path,
+    follow: bool,
+    overwrite: bool,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let (open_path, replaced) = copy_preflight(from, to, follow, overwrite, context)?;
+    let mut source_file = super::open_regular_input(&open_path, from, true, context)?;
+    let opened = source_file
+        .metadata()
+        .map_err(|error| io_error(error, format!("checking {}", from.display())))?;
+    // Keep only the permission bits: setuid, setgid and sticky are never copied.
+    let mode = file_mode(&opened).map(|mode| mode & 0o777);
+
+    let parent = to
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = to
+        .file_name()
+        .ok_or_else(|| invalid(format!("path has no file name: {}", to.display())))?;
+    let (staged_path, mut staged) = if overwrite {
+        create_temp(parent, file_name)?
+    } else {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(to).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                failed(
+                    "conflict",
+                    format!("destination appeared before the copy: {}", to.display()),
+                )
+            } else {
+                io_error(error, format!("creating {}", to.display()))
+            }
+        })?;
+        (to.to_path_buf(), file)
+    };
+    // Removes the staged file on any early return. It is disarmed only once
+    // the staged file has become the destination.
+    let mut cleanup = TempCleanup(Some(staged_path.clone()));
+
+    let copied = copy_chunked(&mut source_file, &mut staged, &staged_path, context)?;
+    if copied != opened.len() {
+        return Err(failed(
+            "conflict",
+            format!("source changed while copying: {}", from.display()),
+        ));
+    }
+    if let Some(mode) = mode {
+        set_mode(&staged, mode).map_err(|error| {
+            io_error(
+                error,
+                format!("setting permissions on {}", staged_path.display()),
+            )
+        })?;
+    }
+    context.checkpoint()?;
+    staged.sync_all().map_err(|error| {
+        io_error(
+            error,
+            format!("syncing temporary file {}", staged_path.display()),
+        )
+    })?;
+    drop(staged);
+
+    if overwrite {
+        // Recheck the destination immediately before the rename.
+        copy_preflight(from, to, follow, overwrite, context)?;
+        context.checkpoint()?;
+        crate::platform::replace_file(&staged_path, to).map_err(|error| {
+            if error.published {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "copy to {} was published but its directory entry may not be on disk: {}",
+                        to.display(),
+                        error.error
+                    ),
+                )
+            } else {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "could not confirm copy to {}: {}",
+                        to.display(),
+                        error.error
+                    ),
+                )
+            }
+        })?;
+    }
+    cleanup.0 = None;
+    context.checkpoint()?;
+    sync_directory(parent).map_err(|error| {
+        failed(
+            "uncertain_effect",
+            format!(
+                "copy to {} completed but syncing its parent failed: {error}",
+                to.display()
+            ),
+        )
+    })?;
+    Ok(serde_json::json!({
+        "from": result_path(from)?,
+        "to": result_path(to)?,
+        "bytes_copied": copied,
+        "replaced": replaced,
+    }))
+}
+
+/// Stream `source` into `destination` in `IO_CHUNK_BYTES` pieces, checking the
+/// execution budget before each read. Returns the number of bytes written.
+fn copy_chunked(
+    source: &mut File,
+    destination: &mut File,
+    destination_path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<u64, AppletError> {
+    let mut chunk = vec![0u8; IO_CHUNK_BYTES];
+    let mut copied = 0u64;
+    let mut work = 0usize;
+    loop {
+        context.checkpoint()?;
+        let read = source
+            .read(&mut chunk)
+            .map_err(|error| io_error(error, "reading source file"))?;
+        if read == 0 {
+            break;
+        }
+        let data = chunk
+            .get(..read)
+            .ok_or_else(|| failed("io_error", "read reported more bytes than the buffer holds"))?;
+        destination.write_all(data).map_err(|error| {
+            io_error(
+                error,
+                format!("writing temporary file {}", destination_path.display()),
+            )
+        })?;
+        copied = copied.saturating_add(read as u64);
+        work += 1;
+        checkpoint_work(context, work)?;
+    }
+    Ok(copied)
+}
+
 pub(crate) struct PathLock {
     // The OS lock remains held until this file descriptor is dropped.
     _file: File,
@@ -1364,7 +1650,7 @@ impl Drop for TempCleanup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::applets::AppletErrorKind;
+    use crate::applets::{AppletErrorKind, ExecutionBudgetExceeded};
 
     fn write_args() -> Map<String, Value> {
         serde_json::json!({
@@ -1766,5 +2052,361 @@ mod tests {
             &context
         )
         .is_err());
+    }
+
+    fn copy_args(from: &Path, to: &Path, extra: Value) -> Map<String, Value> {
+        let mut args = serde_json::json!({
+            "from": from.to_str().unwrap(),
+            "to": to.to_str().unwrap(),
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        if let Value::Object(extra) = extra {
+            args.extend(extra);
+        }
+        args
+    }
+
+    /// Staged `.tmp` files left behind. The advisory lock file is retained on
+    /// purpose, so it is not counted.
+    fn temporary_count(directory: &Path) -> usize {
+        fs::read_dir(directory)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+            .count()
+    }
+
+    #[test]
+    fn copy_plain_file_copies_bytes_and_reports_a_new_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("copy.txt");
+        fs::write(&source, b"hello copy").unwrap();
+        let record = copy(
+            &copy_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["bytes_copied"].as_u64(), Some(10), "{record}");
+        assert_eq!(record["replaced"], false, "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"hello copy");
+        assert_eq!(fs::read(&source).unwrap(), b"hello copy");
+    }
+
+    #[test]
+    fn copy_refuses_an_existing_destination_unless_overwrite_is_true() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("keep.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+        let error = copy(
+            &copy_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "conflict");
+        assert_eq!(fs::read(&destination).unwrap(), b"old");
+    }
+
+    #[test]
+    fn copy_overwrite_replaces_the_destination_and_reports_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("target.txt");
+        fs::write(&source, b"fresh bytes").unwrap();
+        fs::write(&destination, b"stale").unwrap();
+        let record = copy(
+            &copy_args(
+                &source,
+                &destination,
+                serde_json::json!({ "overwrite": true }),
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["replaced"], true, "{record}");
+        assert_eq!(record["bytes_copied"].as_u64(), Some(11), "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"fresh bytes");
+        assert_eq!(
+            temporary_count(directory.path()),
+            0,
+            "no temporary may remain"
+        );
+    }
+
+    #[test]
+    fn copy_failure_midway_with_overwrite_leaves_the_old_destination_intact() {
+        // Injected fault: the budget checkpoint fails after a few dozen calls.
+        // A 5 MB source is 80 chunks, so the failure lands inside the streaming
+        // loop, after the staged temporary has received data.
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.bin");
+        let destination = directory.path().join("target.bin");
+        fs::write(&source, vec![7u8; 5 * 1024 * 1024]).unwrap();
+        fs::write(&destination, b"old content").unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let checkpoint = || {
+            calls.set(calls.get() + 1);
+            if calls.get() > 40 {
+                Err(ExecutionBudgetExceeded::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let context = ExecutionContext::new(&checkpoint);
+        let error = copy(
+            &copy_args(
+                &source,
+                &destination,
+                serde_json::json!({ "overwrite": true }),
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, AppletErrorKind::Cancelled);
+        assert_eq!(fs::read(&destination).unwrap(), b"old content");
+        assert_eq!(
+            temporary_count(directory.path()),
+            0,
+            "no temporary may remain"
+        );
+    }
+
+    #[test]
+    fn copy_failure_midway_without_overwrite_removes_the_partial_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.bin");
+        let destination = directory.path().join("new.bin");
+        fs::write(&source, vec![3u8; 5 * 1024 * 1024]).unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let checkpoint = || {
+            calls.set(calls.get() + 1);
+            if calls.get() > 40 {
+                Err(ExecutionBudgetExceeded::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let context = ExecutionContext::new(&checkpoint);
+        let error = copy(
+            &copy_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, AppletErrorKind::Cancelled);
+        assert!(
+            !destination.exists(),
+            "a failed copy must not leave its partial file"
+        );
+    }
+
+    #[test]
+    fn copy_refuses_the_same_file_before_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let file = directory.path().join("same.txt");
+        fs::write(&file, b"keep").unwrap();
+        fs::create_dir(directory.path().join("sub")).unwrap();
+        let spelled = directory.path().join("sub").join("..").join("same.txt");
+        for overwrite in [false, true] {
+            let error = copy(
+                &copy_args(
+                    &file,
+                    &spelled,
+                    serde_json::json!({ "overwrite": overwrite }),
+                ),
+                directory.path(),
+                &context,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "invalid_request");
+            assert!(error.message.contains("same file"), "{}", error.message);
+            assert_eq!(fs::read(&file).unwrap(), b"keep");
+        }
+        assert_eq!(
+            temporary_count(directory.path()),
+            0,
+            "no temporary may remain"
+        );
+    }
+
+    #[test]
+    fn copy_refuses_a_directory_destination_and_a_directory_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        fs::write(&source, b"data").unwrap();
+        let destination_directory = directory.path().join("dest-dir");
+        fs::create_dir(&destination_directory).unwrap();
+        let error = copy(
+            &copy_args(
+                &source,
+                &destination_directory,
+                serde_json::json!({ "overwrite": true }),
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("directory"), "{}", error.message);
+        assert!(destination_directory.is_dir());
+
+        let source_directory = directory.path().join("src-dir");
+        fs::create_dir(&source_directory).unwrap();
+        let error = copy(
+            &copy_args(
+                &source_directory,
+                &directory.path().join("out.txt"),
+                Value::Null,
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(
+            error.message.contains("not a regular file"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn copy_of_an_absent_source_is_an_absence_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let error = copy(
+            &copy_args(
+                &directory.path().join("missing"),
+                &directory.path().join("out.txt"),
+                Value::Null,
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "not_found");
+        assert_eq!(error.kind, AppletErrorKind::Absence);
+    }
+
+    #[test]
+    fn copy_streams_five_megabytes_byte_for_byte() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("big.bin");
+        let destination = directory.path().join("big-copy.bin");
+        let data: Vec<u8> = (0..5 * 1024 * 1024)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        fs::write(&source, &data).unwrap();
+        let record = copy(
+            &copy_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["bytes_copied"].as_u64(), Some(data.len() as u64));
+        assert!(fs::read(&destination).unwrap() == data);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_refuses_a_symlink_source_unless_follow_is_true() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let target = directory.path().join("target.txt");
+        fs::write(&target, b"secret").unwrap();
+        let link = directory.path().join("link");
+        symlink(&target, &link).unwrap();
+        let destination = directory.path().join("out.txt");
+
+        let error = copy(
+            &copy_args(&link, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(
+            error.message.contains("without follow"),
+            "{}",
+            error.message
+        );
+        assert!(!destination.exists());
+
+        let record = copy(
+            &copy_args(&link, &destination, serde_json::json!({ "follow": true })),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["bytes_copied"].as_u64(), Some(6));
+        assert_eq!(fs::read(&destination).unwrap(), b"secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_refuses_a_symlink_destination_even_with_overwrite() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let target = directory.path().join("target.txt");
+        fs::write(&target, b"original").unwrap();
+        let link = directory.path().join("dest-link");
+        symlink(&target, &link).unwrap();
+        let source = directory.path().join("source.txt");
+        fs::write(&source, b"new").unwrap();
+
+        let error = copy(
+            &copy_args(&source, &link, serde_json::json!({ "overwrite": true })),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_carries_permission_bits_but_never_setuid_setgid_or_sticky() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("tool.sh");
+        fs::write(&source, b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o7755)).unwrap();
+        let destination = directory.path().join("tool-copy.sh");
+        copy(
+            &copy_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        let mode = fs::metadata(&destination).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o755, "only the rwx bits may be carried");
     }
 }

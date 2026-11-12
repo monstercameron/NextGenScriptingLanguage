@@ -10,6 +10,7 @@ mod config;
 mod csv;
 mod ensure;
 mod env_file;
+mod executable_lookup;
 mod file_test;
 mod filesystem;
 mod glob;
@@ -23,7 +24,10 @@ mod list;
 mod path;
 mod redact;
 mod shared;
+mod state;
 mod structured;
+mod sys_facts;
+mod system_restart;
 mod template;
 mod text;
 mod time;
@@ -311,6 +315,8 @@ pub fn execute_with_context(
         "fs.ensure_file" => ensure::ensure_file(args, cwd, context),
         "fs.ensure_line" => ensure::ensure_line(args, cwd, context),
         "conf.set" => ensure::conf_set(args, cwd, context),
+        "conf.ensure_block" => ensure::conf_ensure_block(args, cwd, context),
+        "conf.remove_block" => ensure::conf_remove_block(args, cwd, context),
         "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd, context),
         "fs.ensure_dir" => ensure::ensure_dir(args, cwd, context),
         "yaml.parse" => yaml::parse(args, input, context),
@@ -324,6 +330,7 @@ pub fn execute_with_context(
         "text.lines" => text::lines(args, input, context),
         "text.split" => text::split(args, input, context),
         "fs.test" => file_test::test(args, cwd, context),
+        "exec.which" => executable_lookup::which(args, cwd, context),
         "terminal.info" => file_test::terminal_info(args, context),
         "fs.glob" => glob::glob(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
@@ -377,6 +384,13 @@ pub fn execute_with_context(
         "fs.read" | "fs.snapshot" => filesystem::read(args, cwd, context),
         "fs.stat" => filesystem::stat(args, cwd, context),
         "fs.realpath" => filesystem::realpath(args, cwd, context),
+        "fs.copy" => filesystem::copy(args, cwd, context),
+        "sys.facts" => sys_facts::facts(args, context),
+        "system.restart_required" => system_restart::assess(args, context),
+        "state.flag_set" | "state.flag_clear" | "state.flag_is_set" | "state.toggle"
+        | "state.value_load" | "state.value_store" | "state.debounce" => {
+            state::run(operation, args, context)
+        }
         "fs.write_atomic" => filesystem::write_atomic(args, input, cwd, context),
         "fs.unlink_checked" => filesystem::unlink_checked(args, cwd, context),
         "jsonc.set" => jsonc::set(args, cwd, context),
@@ -583,9 +597,141 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    fn args(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
     fn run(operation: &str, args: Value, cwd: &Path) -> Result<Value, super::AppletError> {
         let map: Map<String, Value> = args.as_object().cloned().unwrap_or_default();
         execute_in_cwd(operation, &map, b"", cwd)
+    }
+
+    #[test]
+    fn exec_which_reports_absent_names_and_refuses_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = run(
+            "exec.which",
+            json!({"name": "execute-no-such-tool-318", "path": dir.path()}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(absent, json!({"found": false, "path": null, "all": []}));
+        assert!(run(
+            "exec.which",
+            json!({"name": "bin/tool", "path": ""}),
+            dir.path()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn sys_facts_reads_only_under_the_given_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let vendor = dir.path().join("sys/class/dmi/id");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("sys_vendor"), "Fixture Corp\n").unwrap();
+        let output = run("sys.facts", json!({"root": dir.path()}), dir.path()).unwrap();
+        assert_eq!(output["dmi"]["sys_vendor"], "Fixture Corp");
+        assert_eq!(output["pci_display"], json!([]));
+        assert!(run("sys.facts", json!({"root": "relative/root"}), dir.path()).is_err());
+    }
+
+    #[test]
+    fn system_restart_required_reads_the_reboot_marker_under_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let quiet = run(
+            "system.restart_required",
+            json!({"root": dir.path()}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(quiet["reboot_required"], json!(false));
+        assert_eq!(quiet["reasons"], json!([]));
+        let marker_dir = dir.path().join("var/run");
+        fs::create_dir_all(&marker_dir).unwrap();
+        fs::write(
+            marker_dir.join("reboot-required"),
+            "*** System restart required ***\n",
+        )
+        .unwrap();
+        let flagged = run(
+            "system.restart_required",
+            json!({"root": dir.path()}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(flagged["reboot_required"], json!(true));
+    }
+
+    #[test]
+    fn state_flags_toggle_and_values_round_trip_in_a_state_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        let call = |operation: &str, arguments: Value| {
+            super::state::apply(operation, &args(arguments), state).unwrap()
+        };
+        assert_eq!(
+            call("state.flag_set", json!({"name": "maint/window"})),
+            json!({"set": true})
+        );
+        assert_eq!(
+            call("state.flag_is_set", json!({"name": "maint/window"})),
+            json!(true)
+        );
+        assert_eq!(
+            call("state.toggle", json!({"name": "maint/window"})),
+            json!(false)
+        );
+        assert_eq!(
+            call("state.toggle", json!({"name": "maint/window"})),
+            json!(true)
+        );
+        assert_eq!(
+            call("state.flag_clear", json!({"name": "maint/window"})),
+            json!({"set": false})
+        );
+        assert_eq!(
+            call("state.flag_is_set", json!({"name": "maint/window"})),
+            json!(false)
+        );
+        assert_eq!(
+            call("state.value_load", json!({"name": "last/build"})),
+            json!({"found": false, "value": null})
+        );
+        assert_eq!(
+            call(
+                "state.value_store",
+                json!({"name": "last/build", "value": "v1.2"})
+            ),
+            json!({"written": true})
+        );
+        assert_eq!(
+            call("state.value_load", json!({"name": "last/build"})),
+            json!({"found": true, "value": "v1.2"})
+        );
+    }
+
+    #[test]
+    fn state_debounce_allows_one_event_inside_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let arguments = args(json!({"name": "notify/disk", "window_ms": 60_000}));
+        assert_eq!(
+            super::state::apply("state.debounce", &arguments, dir.path()).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            super::state::apply("state.debounce", &arguments, dir.path()).unwrap(),
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn state_refuses_unsafe_names_and_missing_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run("state.flag_set", json!({"name": "../escape"}), dir.path()).is_err());
+        assert!(run("state.flag_set", json!({"name": 7}), dir.path()).is_err());
+        assert!(run("state.value_store", json!({"name": "ok"}), dir.path()).is_err());
+        assert!(run("state.debounce", json!({"name": "ok"}), dir.path()).is_err());
     }
 
     #[test]

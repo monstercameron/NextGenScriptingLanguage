@@ -1,0 +1,143 @@
+{
+  "name": "conf.ensure_block",
+  "description": "Keeps one named, tool-managed block of lines in a config file between a begin and an end marker line. An existing block with that name has its body replaced in place; otherwise the block is appended. Nothing outside the block changes, and the file changes only when the block does. A marker without its partner, a duplicate block or a nested block is an error that names the line.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Config file path to update; relative paths resolve from the program working directory. A missing file is created."
+    },
+    "id": {
+      "type": "string",
+      "required": true,
+      "description": "Block name: 1 to 200 printable ASCII characters on one line, without the comment marker."
+    },
+    "content": {
+      "type": "string",
+      "required": true,
+      "description": "Body lines of the block. No line may look like a block marker."
+    },
+    "comment": {
+      "type": "string",
+      "enum": [
+        "#",
+        ";",
+        "//",
+        "--"
+      ],
+      "description": "Line comment marker used for the block's begin and end marker lines: one of the listed markers. Omitted means the hash sign."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "conf.ensure_block"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "id": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "content": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "comment": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "#",
+              ";",
+              "//",
+              "--"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "conf ensure block"
+  ],
+  "examples": [
+    {
+      "program": "run conf.ensure_block with path \"catalog-example-block.conf\" and id \"proxy\" and content \"use_proxy = yes\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example-block.conf"
+      }
+    }
+  ]
+}

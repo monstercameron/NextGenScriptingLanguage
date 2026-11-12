@@ -1,0 +1,39 @@
+{
+  "name": "exec.which",
+  "description": "Looks up one or more executable names in PATH without starting a process and returns whether any were found and their paths.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": { "type": "string", "description": "One executable name to find. Use names instead to check several." },
+    "names": { "type": "list", "items": "string", "description": "Executable names to search for; found is true if any name exists." },
+    "path": { "type": "string", "description": "Optional PATH value to search instead of the process PATH." }
+  },
+  "arguments": [
+    { "literal": "exec.which" },
+    { "literal": "--args" },
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": { "kind": "oneshot" },
+    "output": { "type": "json", "encoding": "json" },
+    "capabilities": ["filesystem.read"],
+    "effects": ["filesystem.read"],
+    "ports": {
+      "inputs": {
+        "name": { "schema": { "type": "text" }, "delivery": "single" },
+        "names": { "schema": { "type": "list", "items": { "type": "text" } }, "delivery": "single" },
+        "path": { "schema": { "type": "text" }, "delivery": "single" }
+      },
+      "outputs": { "value": { "schema": { "type": "json" }, "delivery": "single" } }
+    }
+  },
+  "phrases": ["executable lookup", "which executable"],
+  "examples": [
+    {
+      "program": "run exec.which with name \"execute\" and path \"\" as result",
+      "expected_output": { "found": false, "path": null, "all": [] }
+    }
+  ]
+}

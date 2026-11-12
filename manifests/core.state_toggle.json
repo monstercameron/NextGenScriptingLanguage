@@ -1,0 +1,63 @@
+{
+  "name": "state.toggle",
+  "description": "Flips a named flag in the execute state directory and returns its new state: true when the flag is now set, false when it was cleared.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Flag name: one or more slash-separated segments of ASCII letters, digits, '-', '_' or '.'. Segments may not be '.' or '..'."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "state.toggle"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "toggle state flag"
+  ]
+}

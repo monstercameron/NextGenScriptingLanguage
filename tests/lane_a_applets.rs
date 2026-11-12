@@ -125,6 +125,60 @@ fn fs_test_symlink_inspects_the_link_and_other_kinds_follow_it() {
 }
 
 #[test]
+fn exec_which_searches_path_and_refuses_separator_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("tool.exe");
+    fs::write(&executable, b"fixture").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let non_executable = temp.path().join("plain");
+        fs::write(&non_executable, b"fixture").unwrap();
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    fs::create_dir(temp.path().join("directory.exe")).unwrap();
+    let path = temp.path().to_string_lossy().to_string();
+    let result = execute_in_cwd(
+        "exec.which",
+        &args(json!({"name": "tool.exe", "path": path})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(result["found"], json!(true));
+    assert_eq!(result["path"], json!(executable.to_string_lossy()));
+    assert_eq!(result["all"].as_array().unwrap().len(), 1);
+
+    let relative = execute_in_cwd(
+        "exec.which",
+        &args(json!({"name": "./tool.exe", "path": ""})),
+        &[],
+        temp.path(),
+    );
+    assert!(relative.is_err(), "names with a path separator are refused");
+    let missing = execute_in_cwd(
+        "exec.which",
+        &args(json!({"names": ["directory", "absent-command"], "path": path})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(missing, json!({"found": false, "path": null, "all": []}));
+    #[cfg(unix)]
+    {
+        let non_executable = execute_in_cwd(
+            "exec.which",
+            &args(json!({"name": "plain", "path": temp.path().to_string_lossy()})),
+            &[],
+            temp.path(),
+        )
+        .unwrap();
+        assert_eq!(non_executable["found"], json!(false));
+    }
+}
+
+#[test]
 fn fs_glob_sorts_matches_and_returns_empty_lists_for_no_match() {
     let temp = tempfile::tempdir().unwrap();
     // Uppercase sorts before lowercase in byte (code-point) order.

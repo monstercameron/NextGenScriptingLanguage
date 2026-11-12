@@ -1,0 +1,73 @@
+{
+  "name": "state.value_store",
+  "description": "Stores a named small text value in the execute state directory, replacing any earlier value atomically. Values over one mebibyte are refused. Returns written true.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Value name: one or more slash-separated segments of ASCII letters, digits, '-', '_' or '.'. Segments may not be '.' or '..'."
+    },
+    "value": {
+      "type": "string",
+      "required": true,
+      "description": "UTF-8 text to store."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "state.value_store"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "store state value"
+  ]
+}

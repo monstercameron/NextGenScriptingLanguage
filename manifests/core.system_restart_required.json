@@ -1,0 +1,62 @@
+{
+  "name": "system.restart_required",
+  "description": "Reports whether a reboot or a service restart is needed after an update. Reads distro reboot marker files, the running kernel against the installed module trees, and processes that run a binary or library replaced on disk. Returns reboot_required, restart_required, the reasons found and whether the process scan was truncated. Reads only files below root and executes nothing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "root": {
+      "type": "path",
+      "description": "Optional absolute directory that stands in for the root of the filesystem, for tests and chroots. Omitted reads the live system under /."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "system.restart_required"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "root": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "restart required",
+    "reboot required"
+  ]
+}

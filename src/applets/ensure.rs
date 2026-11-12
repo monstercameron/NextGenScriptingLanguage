@@ -169,6 +169,75 @@ pub(super) fn conf_set(
     Ok(json!({"changed": updated.is_some(), "path": text}))
 }
 
+/// `conf.ensure_block`: make the managed block `id` hold exactly `content`,
+/// appending the block when the file has none. Only that block changes. Reads
+/// and writes as `conf.set` does, so a missing file is created, and a malformed
+/// block structure is refused before anything is written.
+pub(super) fn conf_ensure_block(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let text = nonempty_path(args)?;
+    let path = resolve_path(text, cwd);
+    let id = required_string(args, "id")?;
+    let content = required_string(args, "content")?;
+    let comment = conf_comment(args)?;
+    let current = read_current(&path, context)?;
+    let existing = match &current {
+        Some(current) => std::str::from_utf8(&current.bytes)
+            .map_err(|error| invalid(format!("file is not UTF-8 text: {error}")))?,
+        None => "",
+    };
+    let updated = ensure_block_text(existing, id, content, comment).map_err(invalid)?;
+    if let Some(new_text) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, new_text.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// `conf.remove_block`: remove the managed block `id` and at most one blank line
+/// that separated it. A missing file or a file without that block is left
+/// untouched and reports `changed: false`.
+pub(super) fn conf_remove_block(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let text = nonempty_path(args)?;
+    let path = resolve_path(text, cwd);
+    let id = required_string(args, "id")?;
+    let comment = conf_comment(args)?;
+    let current = read_current(&path, context)?;
+    let existing = match &current {
+        Some(current) => std::str::from_utf8(&current.bytes)
+            .map_err(|error| invalid(format!("file is not UTF-8 text: {error}")))?,
+        None => "",
+    };
+    let updated = remove_block_text(existing, id, comment).map_err(invalid)?;
+    if let Some(new_text) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, new_text.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// Read the optional `comment` marker shared by `conf.set` and the block applets.
+fn conf_comment(args: &Map<String, Value>) -> Result<&'static str, AppletError> {
+    match optional_string(args, "comment", "#")? {
+        "#" => Ok("#"),
+        ";" => Ok(";"),
+        "//" => Ok("//"),
+        "--" => Ok("--"),
+        _ => Err(invalid(
+            "args.comment must be \"#\", \";\", \"//\" or \"--\"",
+        )),
+    }
+}
+
 /// Read the optional `conf.set` style fields. The text forms map onto the
 /// static strings that [`ConfStyle`] holds, so any other value is refused here.
 fn conf_style(args: &Map<String, Value>) -> Result<ConfStyle, AppletError> {
@@ -178,17 +247,7 @@ fn conf_style(args: &Map<String, Value>) -> Result<ConfStyle, AppletError> {
         " " => " ",
         _ => return Err(invalid("args.separator must be \"=\", \":\" or \" \"")),
     };
-    let comment = match optional_string(args, "comment", "#")? {
-        "#" => "#",
-        ";" => ";",
-        "//" => "//",
-        "--" => "--",
-        _ => {
-            return Err(invalid(
-                "args.comment must be \"#\", \";\", \"//\" or \"--\"",
-            ))
-        }
-    };
+    let comment = conf_comment(args)?;
     Ok(ConfStyle {
         separator,
         comment,
@@ -794,9 +853,269 @@ fn replace_piece(pieces: &[&str], index: usize, line: &str) -> String {
     out
 }
 
+/// Longest managed block id, in bytes.
+const BLOCK_ID_MAX_BYTES: usize = 200;
+
+/// Reject a comment marker outside the four forms `conf.set` accepts.
+fn check_block_comment(comment: &str) -> Result<(), String> {
+    if matches!(comment, "#" | ";" | "//" | "--") {
+        Ok(())
+    } else {
+        Err(format!(
+            "comment {comment:?} must be \"#\", \";\", \"//\" or \"--\""
+        ))
+    }
+}
+
+/// A block id is 1 to `BLOCK_ID_MAX_BYTES` bytes of printable ASCII that never
+/// contains the comment marker, so it cannot break or forge a marker line.
+fn check_block_id(id: &str, comment: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > BLOCK_ID_MAX_BYTES {
+        return Err(format!("block id must be 1 to {BLOCK_ID_MAX_BYTES} bytes"));
+    }
+    if !id.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+        return Err(format!("block id {id:?} must be printable ASCII"));
+    }
+    if id.contains(comment) {
+        return Err(format!(
+            "block id {id:?} must not contain the comment marker {comment:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// The text that starts a begin (`word` = "BEGIN") or end (`word` = "END")
+/// marker line. A full marker is this prefix followed by the block id.
+fn block_prefix(comment: &str, word: &str) -> String {
+    format!("{comment} {word} execute managed block: ")
+}
+
+/// A line without its line ending (`\n` or `\r\n`).
+fn line_text(piece: &str) -> &str {
+    match piece.strip_suffix('\n') {
+        Some(rest) => rest.strip_suffix('\r').unwrap_or(rest),
+        None => piece,
+    }
+}
+
+/// The text of line `index` without its line ending. Only the first line can
+/// carry a byte order mark, so only that line has it removed.
+fn block_body(index: usize, piece: &str) -> &str {
+    let body = line_text(piece);
+    if index == 0 {
+        body.strip_prefix('\u{feff}').unwrap_or(body)
+    } else {
+        body
+    }
+}
+
+/// The body lines for a block. A body line may not carry a bare CR or a NUL,
+/// and may not start like a begin or end marker of any block, or it would
+/// change the block structure.
+fn block_lines<'a>(body: &'a str, comment: &str) -> Result<Vec<&'a str>, String> {
+    if body.contains('\0') {
+        return Err("block content must not contain NUL".to_owned());
+    }
+    let begin_prefix = block_prefix(comment, "BEGIN");
+    let end_prefix = block_prefix(comment, "END");
+    let lines: Vec<&str> = body.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.contains('\r') {
+            return Err(format!(
+                "block content line {} contains a bare carriage return",
+                index + 1
+            ));
+        }
+        if line.starts_with(&begin_prefix) || line.starts_with(&end_prefix) {
+            return Err(format!(
+                "block content line {} is a managed block marker",
+                index + 1
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+/// A complete managed block: the piece indexes of its begin and end markers.
+struct ManagedBlock<'a> {
+    id: &'a str,
+    begin: usize,
+    end: usize,
+}
+
+/// Find every managed block in `pieces`. A malformed structure (an unclosed
+/// begin, an end without a begin, an end that names another block, a nested
+/// block, or a repeated id) is an error that names the line.
+fn find_managed_blocks<'a>(
+    pieces: &[&'a str],
+    comment: &str,
+) -> Result<Vec<ManagedBlock<'a>>, String> {
+    let begin_prefix = block_prefix(comment, "BEGIN");
+    let end_prefix = block_prefix(comment, "END");
+    let mut blocks: Vec<ManagedBlock<'a>> = Vec::new();
+    let mut open: Option<(usize, &str)> = None;
+    for (index, &piece) in pieces.iter().enumerate() {
+        let line = index + 1;
+        let body = block_body(index, piece);
+        if let Some(id) = body.strip_prefix(begin_prefix.as_str()) {
+            if let Some((opened, open_id)) = open {
+                return Err(format!(
+                    "line {line}: block {id:?} begins inside block {open_id:?} opened at \
+                     line {}; managed blocks cannot nest",
+                    opened + 1
+                ));
+            }
+            if blocks.iter().any(|block| block.id == id) {
+                return Err(format!(
+                    "line {line}: block {id:?} is already defined earlier in this file"
+                ));
+            }
+            open = Some((index, id));
+        } else if let Some(id) = body.strip_prefix(end_prefix.as_str()) {
+            match open.take() {
+                Some((begin, open_id)) if open_id == id => {
+                    blocks.push(ManagedBlock {
+                        id,
+                        begin,
+                        end: index,
+                    });
+                }
+                Some((begin, open_id)) => {
+                    return Err(format!(
+                        "line {line}: end marker for block {id:?} does not match block \
+                         {open_id:?} begun at line {}",
+                        begin + 1
+                    ))
+                }
+                None => {
+                    return Err(format!(
+                        "line {line}: end marker for block {id:?} has no begin marker"
+                    ))
+                }
+            }
+        }
+    }
+    if let Some((begin, id)) = open {
+        return Err(format!(
+            "line {}: block {id:?} has no end marker",
+            begin + 1
+        ));
+    }
+    Ok(blocks)
+}
+
+/// Make the managed block `id` in `text` hold exactly `body`, and nothing else.
+///
+/// Returns `Ok(None)` when the block already holds `body`, so the caller writes
+/// nothing. An existing block has its body replaced in place; a missing block is
+/// appended at the end after exactly one blank line, unless the text already ends
+/// with a blank line (an empty text gets no blank line). The markers are
+/// `"<comment> BEGIN execute managed block: <id>"` and the matching END line.
+/// Lines use the text's own line ending (CRLF when the text contains CRLF, else
+/// LF), and a missing final newline stays missing on an existing block.
+fn ensure_block_text(
+    text: &str,
+    id: &str,
+    body: &str,
+    comment: &str,
+) -> Result<Option<String>, String> {
+    check_block_comment(comment)?;
+    check_block_id(id, comment)?;
+    let lines = block_lines(body, comment)?;
+    let pieces: Vec<&str> = text.split_inclusive('\n').collect();
+    let blocks = find_managed_blocks(&pieces, comment)?;
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let begin = format!("{}{id}", block_prefix(comment, "BEGIN"));
+    let end = format!("{}{id}", block_prefix(comment, "END"));
+    let mut out = String::with_capacity(text.len() + body.len() + begin.len() + end.len() + 8);
+
+    if let Some(block) = blocks.iter().find(|block| block.id == id) {
+        let current: Vec<&str> = pieces[block.begin + 1..block.end]
+            .iter()
+            .map(|piece| line_text(piece))
+            .collect();
+        if current == lines {
+            return Ok(None);
+        }
+        for piece in &pieces[..=block.begin] {
+            out.push_str(piece);
+        }
+        for line in &lines {
+            out.push_str(line);
+            out.push_str(eol);
+        }
+        for piece in &pieces[block.end..] {
+            out.push_str(piece);
+        }
+        return Ok(Some(out));
+    }
+
+    let ends_blank = pieces
+        .last()
+        .is_some_and(|piece| block_body(pieces.len() - 1, piece).trim().is_empty());
+    out.push_str(text);
+    if !text.is_empty() {
+        if !text.ends_with('\n') {
+            out.push_str(eol);
+        }
+        if !ends_blank {
+            out.push_str(eol);
+        }
+    }
+    for line in std::iter::once(begin.as_str())
+        .chain(lines.iter().copied())
+        .chain(std::iter::once(end.as_str()))
+    {
+        out.push_str(line);
+        out.push_str(eol);
+    }
+    Ok(Some(out))
+}
+
+/// Remove the managed block `id` from `text`, together with at most one blank
+/// line that separated it: the blank line before the begin marker, or else the
+/// one after the end marker. Returns `Ok(None)` when there is no such block. A
+/// byte order mark on the first line stays in the file.
+fn remove_block_text(text: &str, id: &str, comment: &str) -> Result<Option<String>, String> {
+    check_block_comment(comment)?;
+    check_block_id(id, comment)?;
+    let pieces: Vec<&str> = text.split_inclusive('\n').collect();
+    let blocks = find_managed_blocks(&pieces, comment)?;
+    let Some(block) = blocks.iter().find(|block| block.id == id) else {
+        return Ok(None);
+    };
+    let is_blank = |index: usize| block_body(index, pieces[index]).trim().is_empty();
+    let mut first = block.begin;
+    let mut last = block.end;
+    if first > 0 && is_blank(first - 1) {
+        first -= 1;
+    } else if last + 1 < pieces.len() && is_blank(last + 1) {
+        last += 1;
+    }
+    let mut out = String::with_capacity(text.len());
+    if first == 0
+        && pieces
+            .first()
+            .is_some_and(|piece| piece.starts_with('\u{feff}'))
+    {
+        out.push('\u{feff}');
+    }
+    for (index, piece) in pieces.iter().enumerate() {
+        if index < first || index > last {
+            out.push_str(piece);
+        }
+    }
+    Ok(Some(out))
+}
+
 #[cfg(test)]
 mod set_key_tests {
-    use super::{set_key_text, ConfStyle};
+    use super::{
+        conf_ensure_block, conf_remove_block, ensure_block_text, remove_block_text, set_key_text,
+        ConfStyle, ExecutionContext, BLOCK_ID_MAX_BYTES,
+    };
+    use serde_json::{json, Map, Value};
+    use std::fs;
 
     const EQ: ConfStyle = ConfStyle {
         separator: "=",
@@ -1049,5 +1368,568 @@ mod set_key_tests {
         )
         .is_err());
         assert!(set_key_text("", "size", "1", ConfStyle { comment: "%", ..EQ }).is_err());
+    }
+
+    const BEGIN_NET: &str = "# BEGIN execute managed block: net\n";
+    const END_NET: &str = "# END execute managed block: net\n";
+
+    fn ensure(text: &str, id: &str, body: &str) -> Option<String> {
+        ensure_block_text(text, id, body, "#").expect("valid block arguments")
+    }
+
+    fn remove(text: &str) -> Option<String> {
+        remove_block_text(text, "net", "#").expect("valid block arguments")
+    }
+
+    fn args(value: Value) -> Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            other => panic!("expected a JSON object, got {other}"),
+        }
+    }
+
+    #[test]
+    fn ensure_appends_after_one_blank_line_when_text_ends_with_content() {
+        assert_eq!(
+            ensure("a = 1\n", "net", "port = 1\n").as_deref(),
+            Some("a = 1\n\n# BEGIN execute managed block: net\nport = 1\n# END execute managed block: net\n")
+        );
+    }
+
+    #[test]
+    fn ensure_adds_no_blank_line_when_text_already_ends_with_one() {
+        assert_eq!(
+            ensure("a\n\n", "net", "x").as_deref(),
+            Some("a\n\n# BEGIN execute managed block: net\nx\n# END execute managed block: net\n")
+        );
+        assert_eq!(
+            ensure("a\n  \n", "net", "x").as_deref(),
+            Some(
+                "a\n  \n# BEGIN execute managed block: net\nx\n# END execute managed block: net\n"
+            )
+        );
+    }
+
+    #[test]
+    fn ensure_terminates_a_missing_final_newline_before_the_blank_line() {
+        assert_eq!(
+            ensure("a = 1", "net", "x").as_deref(),
+            Some("a = 1\n\n# BEGIN execute managed block: net\nx\n# END execute managed block: net\n")
+        );
+        // A blank last line without a newline only needs its own terminator.
+        assert_eq!(
+            ensure("a\n  ", "net", "x").as_deref(),
+            Some(
+                "a\n  \n# BEGIN execute managed block: net\nx\n# END execute managed block: net\n"
+            )
+        );
+    }
+
+    #[test]
+    fn ensure_on_an_empty_text_writes_the_block_alone() {
+        assert_eq!(
+            ensure("", "net", "x").as_deref(),
+            Some("# BEGIN execute managed block: net\nx\n# END execute managed block: net\n")
+        );
+    }
+
+    #[test]
+    fn empty_body_writes_two_markers_and_a_newline_body_writes_one_blank_line() {
+        assert_eq!(
+            ensure("", "net", "").as_deref(),
+            Some("# BEGIN execute managed block: net\n# END execute managed block: net\n")
+        );
+        assert_eq!(
+            ensure("", "net", "\n").as_deref(),
+            Some("# BEGIN execute managed block: net\n\n# END execute managed block: net\n")
+        );
+    }
+
+    #[test]
+    fn ensure_replaces_the_body_in_place_and_keeps_every_other_line() {
+        let text = format!(
+            "top = 1\n{BEGIN_NET}old = 1\n{END_NET}bottom = 2\n# BEGIN execute managed block: other\nz\n# END execute managed block: other\n"
+        );
+        let expected = format!(
+            "top = 1\n{BEGIN_NET}new = 2\n{END_NET}bottom = 2\n# BEGIN execute managed block: other\nz\n# END execute managed block: other\n"
+        );
+        assert_eq!(
+            ensure(&text, "net", "new = 2\n").as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn ensure_replaces_with_a_longer_or_empty_body() {
+        let text = format!("{BEGIN_NET}x\n{END_NET}");
+        assert_eq!(
+            ensure(&text, "net", "a\nb\nc\n").as_deref(),
+            Some(format!("{BEGIN_NET}a\nb\nc\n{END_NET}").as_str())
+        );
+        assert_eq!(
+            ensure(&text, "net", "").as_deref(),
+            Some(format!("{BEGIN_NET}{END_NET}").as_str())
+        );
+    }
+
+    #[test]
+    fn ensure_reports_none_when_the_block_already_holds_the_body() {
+        let text = format!("a\n\n{BEGIN_NET}x\n{END_NET}");
+        assert_eq!(ensure(&text, "net", "x\n"), None);
+        // Trailing line endings in the body do not change what the block holds.
+        assert_eq!(ensure(&text, "net", "x"), None);
+    }
+
+    #[test]
+    fn ensure_twice_equals_ensure_once() {
+        for text in [
+            "",
+            "a = 1\n",
+            "a = 1",
+            "a\n\n",
+            "x\r\ny\r\n",
+            "x\r\ny",
+            "\u{feff}a\n",
+        ] {
+            let once = ensure(text, "net", "k = v\n").expect("first run changes");
+            assert_eq!(ensure(&once, "net", "k = v\n"), None, "text {text:?}");
+        }
+    }
+
+    #[test]
+    fn other_comment_markers_are_written_and_recognised() {
+        for comment in ["//", ";", "--"] {
+            let block = format!("{comment} BEGIN execute managed block: net\nx\n{comment} END execute managed block: net\n");
+            let once = ensure_block_text("", "net", "x", comment)
+                .expect("valid")
+                .expect("changes");
+            assert_eq!(once, block, "comment {comment}");
+            assert_eq!(ensure_block_text(&once, "net", "x", comment), Ok(None));
+        }
+    }
+
+    #[test]
+    fn crlf_text_gets_crlf_markers_and_body_lines() {
+        assert_eq!(
+            ensure("a = 1\r\n", "net", "x\ny\n").as_deref(),
+            Some("a = 1\r\n\r\n# BEGIN execute managed block: net\r\nx\r\ny\r\n# END execute managed block: net\r\n")
+        );
+    }
+
+    #[test]
+    fn crlf_block_is_replaced_and_stays_crlf() {
+        let text =
+            "# BEGIN execute managed block: net\r\nold\r\n# END execute managed block: net\r\n";
+        assert_eq!(
+            ensure(text, "net", "new").as_deref(),
+            Some(
+                "# BEGIN execute managed block: net\r\nnew\r\n# END execute managed block: net\r\n"
+            )
+        );
+        assert_eq!(
+            ensure(
+                "# BEGIN execute managed block: net\r\nnew\r\n# END execute managed block: net\r\n",
+                "net",
+                "new"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn lf_text_gets_lf_only() {
+        let written = ensure("a\n", "net", "x\ny\n").expect("changes");
+        assert!(!written.contains('\r'));
+    }
+
+    #[test]
+    fn crlf_text_without_final_newline_keeps_it_missing_on_replace() {
+        let text = "# BEGIN execute managed block: net\r\nold\r\n# END execute managed block: net";
+        assert_eq!(
+            ensure(text, "net", "new").as_deref(),
+            Some("# BEGIN execute managed block: net\r\nnew\r\n# END execute managed block: net")
+        );
+    }
+
+    #[test]
+    fn crlf_text_without_final_newline_gets_crlf_before_the_blank_line() {
+        assert_eq!(
+            ensure("a = 1\r\nb", "net", "x").as_deref(),
+            Some("a = 1\r\nb\r\n\r\n# BEGIN execute managed block: net\r\nx\r\n# END execute managed block: net\r\n")
+        );
+    }
+
+    #[test]
+    fn missing_final_newline_stays_missing_when_the_block_is_last() {
+        let text = format!("{BEGIN_NET}old\n# END execute managed block: net");
+        assert_eq!(
+            ensure(&text, "net", "new").as_deref(),
+            Some("# BEGIN execute managed block: net\nnew\n# END execute managed block: net")
+        );
+    }
+
+    #[test]
+    fn byte_order_mark_stays_on_the_first_line() {
+        let text = format!("\u{feff}{BEGIN_NET}old\n{END_NET}");
+        assert_eq!(
+            ensure(&text, "net", "new").as_deref(),
+            Some(format!("\u{feff}{BEGIN_NET}new\n{END_NET}").as_str())
+        );
+        assert_eq!(
+            ensure("\u{feff}a = 1\n", "net", "x").as_deref(),
+            Some("\u{feff}a = 1\n\n# BEGIN execute managed block: net\nx\n# END execute managed block: net\n")
+        );
+    }
+
+    #[test]
+    fn remove_takes_the_block_and_the_blank_line_before_it() {
+        assert_eq!(
+            remove(
+                "a\n\n# BEGIN execute managed block: net\nx\n# END execute managed block: net\nb\n"
+            )
+            .as_deref(),
+            Some("a\nb\n")
+        );
+    }
+
+    #[test]
+    fn remove_takes_the_blank_line_after_when_none_is_before() {
+        assert_eq!(
+            remove(
+                "# BEGIN execute managed block: net\nx\n# END execute managed block: net\n\nrest\n"
+            )
+            .as_deref(),
+            Some("rest\n")
+        );
+    }
+
+    #[test]
+    fn remove_takes_only_one_blank_line() {
+        assert_eq!(
+            remove(
+                "x\n\n# BEGIN execute managed block: net\n# END execute managed block: net\n\ny\n"
+            )
+            .as_deref(),
+            Some("x\n\ny\n")
+        );
+    }
+
+    #[test]
+    fn remove_without_blank_lines_joins_the_neighbours() {
+        assert_eq!(
+            remove("x\n# BEGIN execute managed block: net\nbody\n# END execute managed block: net\ny\n").as_deref(),
+            Some("x\ny\n")
+        );
+    }
+
+    #[test]
+    fn remove_at_end_of_file_without_final_newline() {
+        assert_eq!(
+            remove(
+                "x\n\n# BEGIN execute managed block: net\nbody\n# END execute managed block: net"
+            )
+            .as_deref(),
+            Some("x\n")
+        );
+    }
+
+    #[test]
+    fn remove_of_the_only_block_leaves_an_empty_text() {
+        assert_eq!(
+            remove(&format!("{BEGIN_NET}x\n{END_NET}")).as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn remove_keeps_other_blocks() {
+        let text = "# BEGIN execute managed block: a\n1\n# END execute managed block: a\n\n# BEGIN execute managed block: net\n2\n# END execute managed block: net\n";
+        assert_eq!(
+            remove(text).as_deref(),
+            Some("# BEGIN execute managed block: a\n1\n# END execute managed block: a\n")
+        );
+    }
+
+    #[test]
+    fn remove_reports_none_when_the_block_is_absent() {
+        assert_eq!(remove("x\n"), None);
+        assert_eq!(remove(""), None);
+        let other = "# BEGIN execute managed block: other\nz\n# END execute managed block: other\n";
+        assert_eq!(remove(other), None);
+    }
+
+    #[test]
+    fn remove_keeps_a_byte_order_mark_when_it_removes_the_first_line() {
+        assert_eq!(
+            remove(&format!("\u{feff}{BEGIN_NET}x\n{END_NET}rest\n")).as_deref(),
+            Some("\u{feff}rest\n")
+        );
+    }
+
+    #[test]
+    fn ensure_then_remove_restores_the_original_text_byte_for_byte() {
+        for text in [
+            "",
+            "a = 1\n",
+            "a = 1\nb = 2\n",
+            "x\r\ny\r\n",
+            "\u{feff}a\n",
+            "[sec]\nk=v\n\n[other]\nq=1\n",
+        ] {
+            let written = ensure(text, "net", "k = v\n").expect("changes");
+            assert_eq!(remove(&written).as_deref(), Some(text), "text {text:?}");
+        }
+    }
+
+    #[test]
+    fn ensure_then_remove_drops_the_blank_line_of_a_text_that_already_ended_with_one() {
+        // Documented limit: the blank line before an appended block cannot be
+        // told apart from one the file already had, so remove takes it.
+        let written = ensure("a\n\n", "net", "x").expect("changes");
+        assert_eq!(remove(&written).as_deref(), Some("a\n"));
+    }
+
+    #[test]
+    fn hostile_ids_are_refused() {
+        let long = "x".repeat(BLOCK_ID_MAX_BYTES + 1);
+        for id in [
+            "",
+            "a\nb",
+            "a\rb",
+            "x\n# END execute managed block: y",
+            "a#b",
+            "tab\there",
+            "caf\u{e9}",
+            "nul\0",
+            long.as_str(),
+        ] {
+            assert!(ensure_block_text("", id, "x", "#").is_err(), "id {id:?}");
+            assert!(remove_block_text("", id, "#").is_err(), "id {id:?}");
+        }
+        assert!(ensure_block_text("", "a--b", "x", "--").is_err());
+        assert!(ensure_block_text("", "a//b", "x", "//").is_err());
+    }
+
+    #[test]
+    fn longest_printable_id_is_accepted() {
+        let id = "x".repeat(BLOCK_ID_MAX_BYTES);
+        assert!(ensure_block_text("", &id, "x", "#")
+            .expect("valid")
+            .is_some());
+    }
+
+    #[test]
+    fn hostile_bodies_are_refused() {
+        for body in [
+            "# END execute managed block: net\n",
+            "x\n# BEGIN execute managed block: other\n",
+            "# END execute managed block: other",
+            "a\rb",
+            "a\0b",
+            "ends in cr\r",
+        ] {
+            assert!(
+                ensure_block_text("", "net", body, "#").is_err(),
+                "body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_line_that_only_resembles_a_marker_is_allowed() {
+        assert!(
+            ensure_block_text("", "net", "#END execute managed block: net\n", "#")
+                .expect("valid")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unknown_comment_marker_is_refused() {
+        assert!(ensure_block_text("", "net", "x", "%").is_err());
+        assert!(remove_block_text("", "net", "%").is_err());
+    }
+
+    #[test]
+    fn malformed_states_are_errors_that_name_the_line() {
+        let begin_only = "a\n# BEGIN execute managed block: net\nx\n";
+        let err = ensure_block_text(begin_only, "net", "y", "#").expect_err("unclosed");
+        assert!(
+            err.contains("line 2") && err.contains("no end marker"),
+            "{err}"
+        );
+        assert!(remove_block_text(begin_only, "net", "#").is_err());
+
+        let end_only = "a\n# END execute managed block: net\n";
+        let err = ensure_block_text(end_only, "net", "y", "#").expect_err("no begin");
+        assert!(
+            err.contains("line 2") && err.contains("no begin marker"),
+            "{err}"
+        );
+        assert!(remove_block_text(end_only, "net", "#").is_err());
+
+        let twice = format!("{BEGIN_NET}{END_NET}{BEGIN_NET}{END_NET}");
+        let err = ensure_block_text(&twice, "net", "y", "#").expect_err("duplicate");
+        assert!(
+            err.contains("line 3") && err.contains("already defined"),
+            "{err}"
+        );
+        assert!(remove_block_text(&twice, "net", "#").is_err());
+
+        let nested = "# BEGIN execute managed block: a\n# BEGIN execute managed block: b\n# END execute managed block: b\n# END execute managed block: a\n";
+        let err = ensure_block_text(nested, "a", "y", "#").expect_err("nested");
+        assert!(err.contains("line 2") && err.contains("nest"), "{err}");
+        assert!(remove_block_text(nested, "b", "#").is_err());
+
+        let mismatched = "# BEGIN execute managed block: a\nx\n# END execute managed block: b\n";
+        let err = ensure_block_text(mismatched, "a", "y", "#").expect_err("mismatch");
+        assert!(
+            err.contains("line 3") && err.contains("does not match"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn malformed_state_of_another_block_is_still_an_error() {
+        let broken = "# BEGIN execute managed block: other\nx\n";
+        assert!(ensure_block_text(broken, "net", "y", "#").is_err());
+        assert!(remove_block_text(broken, "net", "#").is_err());
+    }
+
+    #[test]
+    fn applet_ensure_creates_the_block_then_reports_no_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let first = conf_ensure_block(
+            &args(json!({"path": "app.conf", "id": "net", "content": "port = 1\n"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(first, json!({"changed": true, "path": "app.conf"}));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "# BEGIN execute managed block: net\nport = 1\n# END execute managed block: net\n"
+        );
+        let second = conf_ensure_block(
+            &args(json!({"path": "app.conf", "id": "net", "content": "port = 1\n"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(second["changed"], false);
+    }
+
+    #[test]
+    fn applet_ensure_replaces_only_the_block_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = format!("# top comment\nname = demo\n\n{BEGIN_NET}old\n{END_NET}port=80\n");
+        fs::write(dir.path().join("app.conf"), &original).unwrap();
+        let output = conf_ensure_block(
+            &args(json!({
+                "path": "app.conf",
+                "id": "net",
+                "content": "new\n",
+                "comment": "#"
+            })),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            format!("# top comment\nname = demo\n\n{BEGIN_NET}new\n{END_NET}port=80\n")
+        );
+    }
+
+    #[test]
+    fn applet_remove_undoes_ensure_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        fs::write(dir.path().join("app.conf"), "name = demo\n").unwrap();
+        conf_ensure_block(
+            &args(json!({"path": "app.conf", "id": "net", "content": "x\n"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        let removed = conf_remove_block(
+            &args(json!({"path": "app.conf", "id": "net"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(removed, json!({"changed": true, "path": "app.conf"}));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "name = demo\n"
+        );
+        let again = conf_remove_block(
+            &args(json!({"path": "app.conf", "id": "net"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(again["changed"], false);
+    }
+
+    #[test]
+    fn applet_remove_on_a_missing_file_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = conf_remove_block(
+            &args(json!({"path": "absent.conf", "id": "net"})),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(output["changed"], false);
+        assert!(!dir.path().join("absent.conf").exists());
+    }
+
+    #[test]
+    fn applet_refuses_a_malformed_file_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = format!("{BEGIN_NET}x\n");
+        fs::write(dir.path().join("app.conf"), &broken).unwrap();
+        let context = ExecutionContext::unrestricted();
+        assert!(conf_ensure_block(
+            &args(json!({"path": "app.conf", "id": "net", "content": "y\n"})),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+        assert!(conf_remove_block(
+            &args(json!({"path": "app.conf", "id": "net"})),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            broken
+        );
+    }
+
+    #[test]
+    fn applet_refuses_bad_comment_and_missing_fields_without_creating_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        assert!(conf_ensure_block(
+            &args(json!({"path": "new.conf", "id": "net", "content": "x", "comment": "%"})),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+        assert!(conf_ensure_block(
+            &args(json!({"path": "new.conf", "content": "x"})),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+        assert!(
+            conf_remove_block(&args(json!({"path": "new.conf"})), dir.path(), &context,).is_err()
+        );
+        assert!(!dir.path().join("new.conf").exists());
     }
 }

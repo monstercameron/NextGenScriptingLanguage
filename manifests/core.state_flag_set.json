@@ -1,0 +1,62 @@
+{
+  "name": "state.flag_set",
+  "description": "Sets a named flag in the execute state directory. Setting a flag that is already set is not an error. Returns set true.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Flag name: one or more slash-separated segments of ASCII letters, digits, '-', '_' or '.'. Segments may not be '.' or '..'."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "state.flag_set"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "set state flag"
+  ]
+}

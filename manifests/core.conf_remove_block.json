@@ -1,0 +1,132 @@
+{
+  "name": "conf.remove_block",
+  "description": "Removes one named, tool-managed block of lines, with its marker lines, from a config file. A file without that block is left unchanged. A marker without its partner, a duplicate block or a nested block is an error that names the line.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Config file path to update; relative paths resolve from the program working directory."
+    },
+    "id": {
+      "type": "string",
+      "required": true,
+      "description": "Block name: 1 to 200 printable ASCII characters on one line, without the comment marker."
+    },
+    "comment": {
+      "type": "string",
+      "enum": [
+        "#",
+        ";",
+        "//",
+        "--"
+      ],
+      "description": "Line comment marker used for the block's begin and end marker lines: one of the listed markers. Omitted means the hash sign."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "conf.remove_block"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "id": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "comment": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "#",
+              ";",
+              "//",
+              "--"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "conf remove block"
+  ],
+  "examples": [
+    {
+      "program": "run conf.remove_block with path \"catalog-example-absent.conf\" and id \"proxy\" as result",
+      "expected_output": {
+        "changed": false,
+        "path": "catalog-example-absent.conf"
+      }
+    }
+  ]
+}

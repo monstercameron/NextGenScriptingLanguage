@@ -1,0 +1,74 @@
+{
+  "name": "state.debounce",
+  "description": "Allows one event per window for a named key in the execute state directory. Returns true and records the current time when no event was recorded within window_ms, otherwise false and records nothing. Not atomic across concurrent callers.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Debounce key: one or more slash-separated segments of ASCII letters, digits, '-', '_' or '.'. Segments may not be '.' or '..'."
+    },
+    "window_ms": {
+      "type": "integer",
+      "required": true,
+      "description": "Minimum time between allowed events, in milliseconds."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "state.debounce"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "window_ms": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "debounce"
+  ]
+}

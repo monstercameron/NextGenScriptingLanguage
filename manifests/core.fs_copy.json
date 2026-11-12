@@ -1,0 +1,137 @@
+{
+  "name": "fs.copy",
+  "description": "Copies one regular file. Refuses a symbolic-link source unless follow is true, an existing destination unless overwrite is true, a directory or symbolic-link destination, and a destination that is the source itself. With overwrite the destination is replaced atomically, so a failed copy leaves the old file intact. Returns the bytes copied and whether a destination was replaced.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "from": {
+      "type": "path",
+      "required": true,
+      "description": "Source file; relative paths resolve from the program working directory."
+    },
+    "to": {
+      "type": "path",
+      "required": true,
+      "description": "Destination file path; its directory must exist."
+    },
+    "overwrite": {
+      "type": "boolean",
+      "description": "Replace an existing destination file. Omitted or false refuses an existing destination."
+    },
+    "follow": {
+      "type": "boolean",
+      "description": "Copy the file a symbolic-link source points to. Omitted or false refuses a symbolic-link source."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.copy"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "from": {
+          "type": "text"
+        },
+        "to": {
+          "type": "text"
+        },
+        "bytes_copied": {
+          "type": "integer"
+        },
+        "replaced": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "bytes_copied",
+        "replaced"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "from": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "to": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "overwrite": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "follow": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "from": {
+                "type": "text"
+              },
+              "to": {
+                "type": "text"
+              },
+              "bytes_copied": {
+                "type": "integer"
+              },
+              "replaced": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "bytes_copied",
+              "replaced"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "copy file"
+  ]
+}

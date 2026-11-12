@@ -70,3 +70,7 @@ src/bundled_manifests/bodies.bin binary
 
 # Model fixtures match the exact request text, so their sources must keep LF on every checkout.
 examples/ai-gauntlet/** text eol=lf
+
+# Raw benchmark evidence (binaries, archives, samples) stays out of `git archive` source tarballs.
+# tools/check_large_files.py blocks new large or binary files in the tree.
+benchmarks/** export-ignore

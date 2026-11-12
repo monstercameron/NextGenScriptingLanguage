@@ -15,6 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCOPE_PREFIX: &str = "execute-scope-";
 const OWNER_FILE: &str = "owner";
+#[cfg(not(target_os = "linux"))]
+const LOCKED_OWNER_PREFIX: &str = "locked:";
 const ITEM: &str = "item";
 
 struct OpenScope {
@@ -22,10 +24,14 @@ struct OpenScope {
     header: usize,
     /// The scope directory. Dropping the scope removes it and everything in it.
     root: PathBuf,
+    /// The owner record. Non-Linux owners hold a lock on it for the scope's life.
+    owner: Option<fs::File>,
 }
 
 impl Drop for OpenScope {
     fn drop(&mut self) {
+        // Release the owner lock first, so the directory can be removed.
+        self.owner = None;
         // Best effort: a failed removal leaves a directory the next sweep can reclaim.
         let _ = fs::remove_dir_all(&self.root);
     }
@@ -68,11 +74,12 @@ impl ScopeStack {
         SWEPT.get_or_init(|| sweep_stale(&std::env::temp_dir()));
         let root = create_scope_root(&std::env::temp_dir())?;
         // Owns the directory from here on, so any later failure still removes it.
-        let scope = OpenScope {
+        let mut scope = OpenScope {
             header,
             root: root.clone(),
+            owner: None,
         };
-        write_owner(&root)?;
+        scope.owner = Some(write_owner(&root)?);
         let path = root.join(ITEM);
         match kind {
             TempKind::File => {
@@ -98,7 +105,9 @@ impl ScopeStack {
     }
 }
 
-fn write_owner(root: &Path) -> Result<()> {
+/// Record the owner of a scope and return the open owner file. On non-Linux platforms
+/// the caller keeps that file open, because its lock is what marks the scope as live.
+fn write_owner(root: &Path) -> Result<fs::File> {
     let mut file = create_private_file(&root.join(OWNER_FILE))
         .context("recording the temporary scope owner")?;
     #[cfg(target_os = "linux")]
@@ -111,12 +120,17 @@ fn write_owner(root: &Path) -> Result<()> {
             pid,
             process_start_time(proc_root, "self"),
         );
-        write!(file, "{owner}").context("recording the temporary scope owner")
+        write!(file, "{owner}").context("recording the temporary scope owner")?;
     }
     #[cfg(not(target_os = "linux"))]
     {
-        write!(file, "{}", std::process::id()).context("recording the temporary scope owner")
+        // Lock before writing the record, so a sweeper that sees the record also
+        // sees the lock held by this owner.
+        file.lock().context("locking the temporary scope owner")?;
+        write!(file, "{LOCKED_OWNER_PREFIX}{}", std::process::id())
+            .context("recording the temporary scope owner")?;
     }
+    Ok(file)
 }
 
 #[cfg(target_os = "linux")]
@@ -186,16 +200,14 @@ fn create_private_file(path: &Path) -> Result<fs::File> {
     }
 }
 
-/// Remove scope directories left by processes that no longer exist. Only directories
-/// that are real directories, not links, and owned by this user are touched.
-fn sweep_stale(temp: &Path) {
-    sweep_stale_with_owner_check(temp, scope_owner_alive);
-}
-
-fn sweep_stale_with_owner_check(temp: &Path, owner_is_alive: impl Fn(&str) -> bool) {
+/// The scope directories in `temp` that may be swept, each with its owner file path.
+/// Only directories that are real directories, not links, and owned by this user
+/// qualify, and their owner file must be a plain file.
+fn sweep_candidates(temp: &Path) -> Vec<(PathBuf, PathBuf)> {
     let Ok(entries) = fs::read_dir(temp) else {
-        return;
+        return Vec::new();
     };
+    let mut candidates = Vec::new();
     for entry in entries.flatten() {
         if !entry
             .file_name()
@@ -218,12 +230,67 @@ fn sweep_stale_with_owner_check(temp: &Path, owner_is_alive: impl Fn(&str) -> bo
         if owner_meta.file_type().is_symlink() {
             continue;
         }
+        candidates.push((path, owner));
+    }
+    candidates
+}
+
+/// Remove scope directories left by processes that no longer exist.
+#[cfg(target_os = "linux")]
+fn sweep_stale(temp: &Path) {
+    sweep_stale_with_owner_check(temp, scope_owner_alive);
+}
+
+#[cfg(target_os = "linux")]
+fn sweep_stale_with_owner_check(temp: &Path, owner_is_alive: impl Fn(&str) -> bool) {
+    for (path, owner) in sweep_candidates(temp) {
         let Some(owner_text) = fs::read_to_string(&owner).ok() else {
             continue;
         };
         if !owner_is_alive(&owner_text) {
             let _ = fs::remove_dir_all(&path);
         }
+    }
+}
+
+/// Remove scope directories whose owner no longer holds its owner lock.
+#[cfg(not(target_os = "linux"))]
+fn sweep_stale(temp: &Path) {
+    for (path, owner) in sweep_candidates(temp) {
+        if owner_lock_stale(&owner) {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Whether the owner of a scope is gone, judged by its owner lock. A live owner holds
+/// an exclusive lock for the life of the scope, and a lock is independent of PID
+/// namespaces, so a lock that cannot be taken keeps the scope. Records written by
+/// earlier releases carry no lock; those are judged by PID.
+#[cfg(not(target_os = "linux"))]
+fn owner_lock_stale(owner: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = fs::File::open(owner) else {
+        return false;
+    };
+    // WouldBlock means a live owner holds the lock. Any other error keeps the scope too.
+    if file.try_lock().is_err() {
+        return false;
+    }
+    // Read through the locked handle, since other handles cannot read a locked file on Windows.
+    let mut text = String::new();
+    if file.read_to_string(&mut text).is_err() {
+        return false;
+    }
+    let text = text.trim();
+    if let Some(pid) = text.strip_prefix(LOCKED_OWNER_PREFIX) {
+        // Locked and recorded, so the owner process has exited. An empty or malformed
+        // record may come from an owner that has not written yet, so keep it.
+        return pid.parse::<u32>().is_ok();
+    }
+    match text.parse::<u32>() {
+        Ok(pid) => !process_alive(pid),
+        Err(_) => false,
     }
 }
 
@@ -290,11 +357,6 @@ fn scope_owner_alive_in_proc(owner: &str, proc_root: &Path) -> bool {
         None => true,
         Some(current_start) => current_start == start,
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn scope_owner_alive(owner: &str) -> bool {
-    owner.trim().parse::<u32>().map_or(true, process_alive)
 }
 
 #[cfg(target_os = "linux")]
@@ -568,6 +630,37 @@ mod tests {
         #[cfg(not(target_os = "linux"))]
         assert!(!legacy.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn a_scope_whose_owner_lock_is_held_is_never_swept() {
+        let temp = tempfile::tempdir().unwrap();
+        // A scope owned by a live process: the owner record is written and locked as
+        // a scope does, and the lock stays held.
+        let live = temp.path().join(format!("{SCOPE_PREFIX}live"));
+        fs::create_dir(&live).unwrap();
+        let held = write_owner(&live).unwrap();
+        sweep_stale(temp.path());
+        assert!(live.exists());
+        // Once the owner releases the lock, the record names a process that has
+        // exited, so the scope is swept.
+        drop(held);
+        sweep_stale(temp.path());
+        assert!(!live.exists());
+
+        // The same holds for a record that names a PID which is not alive, while the
+        // owner keeps the lock: the lock alone keeps the scope.
+        let elsewhere = temp.path().join(format!("{SCOPE_PREFIX}locked-elsewhere"));
+        fs::create_dir(&elsewhere).unwrap();
+        let mut owner = fs::File::create(elsewhere.join(OWNER_FILE)).unwrap();
+        owner.lock().unwrap();
+        owner.write_all(b"locked:4000000000").unwrap();
+        sweep_stale(temp.path());
+        assert!(elsewhere.exists());
+        drop(owner);
+        sweep_stale(temp.path());
+        assert!(!elsewhere.exists());
     }
 
     #[cfg(target_os = "linux")]

@@ -9214,4 +9214,123 @@ mod tests {
         );
         assert_eq!(snapshot.canonical_root_path(&alias), Some(canonical_caller));
     }
+
+    fn issue_470_registry() -> Registry {
+        let reader = json!({
+            "name": "fixture.reader",
+            "binary": "fixture-reader",
+            "parameters": { "path": { "type": "string", "required": true } },
+            "arguments": [{ "parameter": "path" }]
+        });
+        Registry::from_sources(&[reader.to_string()]).unwrap()
+    }
+
+    /// Error diagnostics as (code, line) pairs, in the order analysis reports them.
+    fn issue_470_errors(diagnostics: &[Diagnostic]) -> Vec<(String, usize)> {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.span.line))
+            .collect()
+    }
+
+    fn issue_470_pairs(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
+        pairs
+            .iter()
+            .map(|(code, line)| ((*code).to_owned(), *line))
+            .collect()
+    }
+
+    #[test]
+    fn independent_validator_classes_are_all_reported_in_one_pass() {
+        let source = [
+            "accept a as text",
+            "run text.upperr with text a as x",
+            "run fixture.reader with path missing_name as y",
+            "run \"true\" as dup",
+            "run \"true\" as dup",
+            "await j",
+        ]
+        .join("\n")
+            + "\n";
+        let diagnostics = analyze_source(&source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[
+                ("applet.unknown", 2),
+                ("check.undefined_name", 3),
+                ("check.duplicate_name", 5),
+                ("check.scope", 6),
+            ]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn unknown_applet_alone_is_reported_once() {
+        let source = "run text.upperr with text \"a\" as x\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("applet.unknown", 1)]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn undefined_name_alone_is_reported_once() {
+        let source = "accept a as text\nrun fixture.reader with path missing_name as y\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("check.undefined_name", 2)]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_binding_alone_is_reported_once() {
+        let source = "run \"true\" as dup\nrun \"true\" as dup\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("check.duplicate_name", 2)]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn unknown_job_alone_is_reported_once() {
+        let source = "await j\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("check.scope", 1)]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn unknown_applet_binding_does_not_cascade_into_undefined_names() {
+        let source =
+            "run text.upperr with text \"a\" as up\nrun fixture.reader with path up as y\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("applet.unknown", 1)]),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_binding_does_not_cascade_into_undefined_names() {
+        let source =
+            "run \"true\" as dup\nrun \"true\" as dup\nrun fixture.reader with path dup as y\n";
+        let diagnostics = analyze_source(source, &issue_470_registry());
+        assert_eq!(
+            issue_470_errors(&diagnostics),
+            issue_470_pairs(&[("check.duplicate_name", 2)]),
+            "{diagnostics:#?}"
+        );
+    }
 }

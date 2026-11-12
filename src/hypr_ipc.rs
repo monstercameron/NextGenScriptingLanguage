@@ -123,6 +123,9 @@ pub enum Request<'a> {
         dispatcher: &'a str,
         args: &'a [&'a str],
     },
+    /// `getoption <name>`, or `j/getoption <name>` when `json` is set. The name
+    /// is an option path such as `general:gaps_in`.
+    GetOption { name: &'a str, json: bool },
 }
 
 fn check_word(word: &str, what: &'static str) -> Result<(), HyprIpcError> {
@@ -131,6 +134,20 @@ fn check_word(word: &str, what: &'static str) -> Result<(), HyprIpcError> {
         || !word.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
         return Err(HyprIpcError::BadName(what));
+    }
+    Ok(())
+}
+
+/// Option paths hold letters, digits and `_ : . -` only. That set excludes
+/// whitespace, newline, NUL and `;`, so the name cannot add a second command.
+fn check_option_name(name: &str) -> Result<(), HyprIpcError> {
+    if name.is_empty()
+        || name.len() > MAX_WORD_BYTES
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'.' | b'-'))
+    {
+        return Err(HyprIpcError::BadName("option name"));
     }
     Ok(())
 }
@@ -160,6 +177,11 @@ fn render(request: &Request<'_>, batch: bool) -> Result<String, HyprIpcError> {
                 out.push_str(arg);
             }
             Ok(out)
+        }
+        Request::GetOption { name, json } => {
+            check_option_name(name)?;
+            let verb = if json { "j/getoption" } else { "getoption" };
+            Ok(format!("{verb} {name}"))
         }
     }
 }
@@ -653,6 +675,85 @@ mod tests {
     #[test]
     fn empty_batch_is_refused() {
         assert_eq!(encode_batch(&[]), Err(HyprIpcError::EmptyBatch));
+    }
+
+    #[test]
+    fn reload_and_configerrors_encode_as_plain_verbs() {
+        let reload = encode(&Request::Query {
+            verb: "reload",
+            json: false,
+        })
+        .unwrap();
+        assert_eq!(reload, b"reload");
+        let errors = encode(&Request::Query {
+            verb: "configerrors",
+            json: true,
+        })
+        .unwrap();
+        assert_eq!(errors, b"j/configerrors");
+    }
+
+    #[test]
+    fn getoption_encodes_the_option_path() {
+        let json = encode(&Request::GetOption {
+            name: "general:gaps_in",
+            json: true,
+        })
+        .unwrap();
+        assert_eq!(json, b"j/getoption general:gaps_in");
+        let plain = encode(&Request::GetOption {
+            name: "decoration.blur.size",
+            json: false,
+        })
+        .unwrap();
+        assert_eq!(plain, b"getoption decoration.blur.size");
+    }
+
+    #[test]
+    fn getoption_refuses_newline_nul_and_separators() {
+        for bad in [
+            "general:gaps_in\nkill",
+            "general:gaps_in\r",
+            "x\0y",
+            "a b",
+            "a;reload",
+            "../x",
+            "a,b",
+            "",
+        ] {
+            assert!(
+                encode(&Request::GetOption {
+                    name: bad,
+                    json: true
+                })
+                .is_err(),
+                "accepted option name {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn getoption_joins_a_batch_without_extra_separators() {
+        let bytes = encode_batch(&[
+            Request::Query {
+                verb: "reload",
+                json: false,
+            },
+            Request::GetOption {
+                name: "general:border_size",
+                json: true,
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            bytes,
+            b"[[BATCH]]reload;j/getoption general:border_size".to_vec()
+        );
+        let bad = encode_batch(&[Request::GetOption {
+            name: "x\n;reload",
+            json: false,
+        }]);
+        assert!(bad.is_err());
     }
 
     #[test]

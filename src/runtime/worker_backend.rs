@@ -2207,6 +2207,48 @@ mod tests {
         assert!(output.bytes.len() <= 8);
     }
 
+    fn frame_test_launch(protocol_version: u32, max_frame_bytes: usize) -> WorkerLaunch {
+        WorkerLaunch {
+            registry: crate::manifest::Registry::default(),
+            applet_name: "echo".to_owned(),
+            binary: PathBuf::from("worker"),
+            cwd: PathBuf::from("."),
+            environment: Vec::new(),
+            policy_fingerprint: None,
+            startup_arguments: Vec::new(),
+            protocol_version,
+            timeout: Duration::from_secs(10),
+            max_frame_bytes,
+            max_stderr_bytes: 4096,
+        }
+    }
+
+    #[test]
+    fn one_mib_echo_request_frame_stays_under_1_4_mb() {
+        let request = WorkerRequest {
+            arguments: Vec::new(),
+            input: (0..1_048_576usize)
+                .map(|index| (index % 251) as u8)
+                .collect(),
+            value: None,
+            json_output: false,
+            max_output_bytes: 1_048_576,
+            sensitivity: crate::security::SensitivitySet::empty(),
+            deadline: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            spawned: Arc::new(AtomicBool::new(false)),
+        };
+        let v2 = validate_request(&frame_test_launch(2, 4 << 20), &request)
+            .expect("v2 request frame encodes");
+        assert!(v2.len() <= 1_400_000, "v2 frame is {} bytes", v2.len());
+        // v1 writes every input byte as a JSON integer, so the same payload
+        // exceeds the bound that v2 meets.
+        let v1 = validate_request(&frame_test_launch(1, 16 << 20), &request)
+            .expect("v1 request frame encodes");
+        assert!(v1.len() > 1_400_000, "v1 frame is {} bytes", v1.len());
+        assert!(v1.len() > v2.len());
+    }
+
     #[test]
     fn v2_json_parser_rejects_duplicate_keys_at_every_depth() {
         assert!(parse_worker_json_strict(br#"{"value":{"count":1,"count":2}}"#).is_err());

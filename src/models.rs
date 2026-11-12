@@ -3177,6 +3177,19 @@ impl RunModelBudget {
         state.settled_millis = state.settled_millis.saturating_add(elapsed.as_millis());
     }
 
+    /// Give back a reservation for a call that never started, such as a failed
+    /// spawn. Its count and token charge are removed in full and no wall time is
+    /// recorded.
+    pub fn release(&self, reservation: Reservation<'_>) {
+        assert!(
+            std::ptr::eq(reservation.budget, self),
+            "a reservation is released on the budget that issued it"
+        );
+        let mut state = self.locked();
+        state.calls = state.calls.saturating_sub(1);
+        state.tokens = state.tokens.saturating_sub(reservation.tokens);
+    }
+
     /// The amounts charged so far.
     pub fn usage(&self) -> BudgetUsage {
         let state = self.locked();

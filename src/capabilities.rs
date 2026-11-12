@@ -228,6 +228,129 @@ mod execution_tests {
         assert!(run_model_fixture_dir(&registry).is_none());
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    fn budgeted_registry(text: &str) -> Registry {
+        let registry = Registry::default();
+        let budget =
+            crate::models::RunModelBudget::new(crate::models::parse_model_budget(text).unwrap());
+        set_run_model_budget(&registry, Some(budget));
+        registry
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    fn classify_argv(max_tokens: Option<&str>) -> Vec<OsString> {
+        let mut argv: Vec<OsString> = ["classify", "--provider", "jev", "--question", "urgent?"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        if let Some(max_tokens) = max_tokens {
+            argv.push(OsString::from("--max-tokens"));
+            argv.push(OsString::from(max_tokens));
+        }
+        argv
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn run_model_budget_is_set_cleared_and_absent_by_default() {
+        let registry = Registry::default();
+        assert!(run_model_budget(&registry).is_none());
+        assert!(reserve_model_call(None, &classify_argv(None))
+            .unwrap()
+            .is_none());
+        set_run_model_budget(
+            &registry,
+            Some(crate::models::RunModelBudget::new(
+                crate::models::parse_model_budget("calls=2").unwrap(),
+            )),
+        );
+        assert!(run_model_budget(&registry).is_some());
+        set_run_model_budget(&registry, None);
+        assert!(run_model_budget(&registry).is_none());
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_budget_refuses_the_third_call_before_any_spawn() {
+        let registry = budgeted_registry("calls=2");
+        let budget = run_model_budget(&registry).expect("budget is set");
+        let mut spawned = 0;
+        for _ in 0..2 {
+            let reservation =
+                reserve_model_call(Some(budget.as_ref()), &classify_argv(Some("100")))
+                    .unwrap()
+                    .expect("reserved");
+            // Stands in for the spawn and the fixture replay of the helper.
+            spawned += 1;
+            budget.settle(
+                reservation,
+                model_call_outcome(Some(br#"{"usage":{"total_tokens":7}}"#)),
+                std::time::Duration::from_millis(1),
+            );
+        }
+        let error =
+            reserve_model_call(Some(budget.as_ref()), &classify_argv(Some("100"))).unwrap_err();
+        assert_eq!(crate::models::diagnostic(&error), "model_budget_exhausted");
+        assert_eq!(spawned, 2);
+        assert_eq!(budget.usage().calls, 2);
+        assert_eq!(budget.usage().tokens, 14);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_budget_spawn_failure_releases_its_reservation() {
+        let budget = crate::models::RunModelBudget::new(
+            crate::models::parse_model_budget("calls=1").unwrap(),
+        );
+        let reservation = reserve_model_call(Some(&budget), &classify_argv(Some("100")))
+            .unwrap()
+            .expect("reserved");
+        // The spawn failed before any child existed, so the call is not counted.
+        budget.release(reservation);
+        assert_eq!(budget.usage(), crate::models::BudgetUsage::default());
+        let retry = reserve_model_call(Some(&budget), &classify_argv(Some("100")))
+            .unwrap()
+            .expect("the released call frees the only slot");
+        budget.settle(retry, model_call_outcome(None), std::time::Duration::ZERO);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_budget_settles_reported_usage_and_keeps_uncertain_reservations() {
+        let budget = crate::models::RunModelBudget::new(
+            crate::models::parse_model_budget("calls=5,tokens=1000").unwrap(),
+        );
+        let reported = reserve_model_call(Some(&budget), &classify_argv(Some("100")))
+            .unwrap()
+            .expect("reserved");
+        budget.settle(
+            reported,
+            model_call_outcome(Some(br#"{"usage":{"total_tokens":7}}"#)),
+            std::time::Duration::from_millis(3),
+        );
+        assert_eq!(budget.usage().tokens, 7);
+        // No --max-tokens: the helper default of 512 is reserved, then kept whole
+        // because the outcome is a timeout.
+        let timed_out = reserve_model_call(Some(&budget), &classify_argv(None))
+            .unwrap()
+            .expect("reserved");
+        budget.settle(
+            timed_out,
+            model_call_outcome(None),
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(budget.usage().calls, 2);
+        assert_eq!(budget.usage().tokens, 519);
+        assert_eq!(
+            model_call_outcome(Some(b"not json")),
+            crate::models::CallOutcome::Uncertain
+        );
+        assert_eq!(
+            model_call_outcome(Some(br#"{"text":"no usage"}"#)),
+            crate::models::CallOutcome::Uncertain
+        );
+    }
+
     fn grant() -> AppletGrant {
         AppletGrant {
             capabilities: BTreeSet::from([
@@ -4327,6 +4450,72 @@ pub fn set_run_model_fixture_dir(registry: &Registry, dir: Option<&str>) -> Resu
 pub(crate) fn run_model_fixture_dir(registry: &Registry) -> Option<String> {
     let configured = registry.host_state::<Option<RunModelFixtureDir>>();
     configured.as_ref().as_ref().map(|dir| dir.0.clone())
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+/// Set the run's model budget, or clear it with `None`. While it is set, each
+/// `@execute-model` call reserves against it before it spawns (see
+/// [`reserve_model_call`]). With no budget set, no reservation is taken.
+pub fn set_run_model_budget(registry: &Registry, budget: Option<crate::models::RunModelBudget>) {
+    registry.set_host_state(budget.map(std::sync::Arc::new));
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+/// The run's model budget, when one is set.
+pub fn run_model_budget(
+    registry: &Registry,
+) -> Option<std::sync::Arc<crate::models::RunModelBudget>> {
+    let configured = registry.host_state::<Option<std::sync::Arc<crate::models::RunModelBudget>>>();
+    configured.as_ref().clone()
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+/// Reserve one `@execute-model` call against the run budget before it spawns.
+/// The reservation charges the helper's `--max-tokens` value (512 when the argv
+/// names none). With no budget this returns `Ok(None)` and takes no lock.
+///
+/// The caller holds the reservation across the spawn and the wait. It settles
+/// with [`model_call_outcome`] after the child exits, or releases it when the
+/// spawn fails. A refusal is the typed `model_budget_exhausted` failure, and no
+/// process has been started.
+pub fn reserve_model_call<'budget>(
+    budget: Option<&'budget crate::models::RunModelBudget>,
+    arguments: &[OsString],
+) -> Result<Option<crate::models::Reservation<'budget>>> {
+    let Some(budget) = budget else {
+        return Ok(None);
+    };
+    let max_tokens = model_argv_max_tokens(arguments);
+    budget
+        .reserve(crate::models::CallEstimate { max_tokens })
+        .map(Some)
+        .map_err(anyhow::Error::from)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+/// The output cap a helper argv asks for: the value after `--max-tokens`, or the
+/// helper default of 512 when the option is absent or unreadable.
+fn model_argv_max_tokens(arguments: &[OsString]) -> u64 {
+    arguments
+        .windows(2)
+        .find(|pair| pair[0].to_str() == Some("--max-tokens"))
+        .and_then(|pair| pair[1].to_str()?.parse::<u64>().ok())
+        .unwrap_or(512)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+/// The settle outcome of one `@execute-model` call. `stdout` is the captured
+/// result of a child that exited successfully, or `None` for a timeout, a failed
+/// wait or a nonzero exit. A result that reports `usage.total_tokens` settles to
+/// that count. Anything else is uncertain and keeps the full reservation.
+pub fn model_call_outcome(stdout: Option<&[u8]>) -> crate::models::CallOutcome {
+    let total = stdout
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .and_then(|result| result["usage"]["total_tokens"].as_u64());
+    match total {
+        Some(total_tokens) => crate::models::CallOutcome::Reported { total_tokens },
+        None => crate::models::CallOutcome::Uncertain,
+    }
 }
 
 /// Whether a model helper argv already names its own fixture (`--fixture` or

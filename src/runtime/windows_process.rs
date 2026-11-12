@@ -3,9 +3,16 @@
 use crate::platform::windows::{available, Job};
 use std::os::windows::io::{AsHandle, AsRawHandle};
 use windows_sys::Win32::{
-    Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
-    System::Threading::WaitForSingleObject,
+    Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    System::Threading::{WaitForMultipleObjects, WaitForSingleObject},
 };
+
+/// Longest the supervising loop blocks before it re-polls stdout, stderr and
+/// cancellation. Pipes cannot be waited on, so this bounds how late those are
+/// noticed; a child exit wakes the loop immediately.
+const SUPERVISION_SLICE: Duration = Duration::from_millis(10);
+/// `WaitForMultipleObjects` accepts at most this many handles.
+const MAX_SUPERVISION_WAIT_HANDLES: usize = 64;
 
 struct ManagedChild {
     child: Child,
@@ -178,7 +185,10 @@ impl Drop for Children {
         }
     }
 }
-fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
+/// Drains up to one read budget of captured stderr. Returns true when the
+/// whole budget was used, meaning more bytes may still be waiting.
+fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<bool> {
+    let mut reads = 0usize;
     if let Some(reader) = child.stderr.as_mut() {
         let mut buffer = [0u8; 8192];
         // A continuously writable stderr must yield to stdout, status,
@@ -191,6 +201,7 @@ fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
                 }
                 Some(0) => break,
                 Some(count) => {
+                    reads += 1;
                     let count = reader.read(&mut buffer[..count.min(8192)])?;
                     let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
                         FORCED_STDERR_CAPTURE_LIMIT
@@ -212,7 +223,36 @@ fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(reads == 16)
+}
+/// Blocks until an unreaped child's process handle is signalled or one
+/// supervision slice (capped by the group deadline) passes. Anonymous pipes
+/// are not waitable, so pipe readiness is picked up at each slice.
+fn wait_for_supervision_event(children: &Children, signals: &Signals) {
+    let timeout = signals.deadline.map_or(SUPERVISION_SLICE, |deadline| {
+        deadline
+            .saturating_duration_since(Instant::now())
+            .min(SUPERVISION_SLICE)
+    });
+    let handles: Vec<_> = children
+        .0
+        .iter()
+        .filter(|child| !child.reaped)
+        .map(|child| child.child.as_handle().as_raw_handle())
+        .collect();
+    if handles.is_empty() || handles.len() > MAX_SUPERVISION_WAIT_HANDLES {
+        std::thread::sleep(timeout);
+        return;
+    }
+    let millis = timeout.as_millis().min(u32::MAX as u128) as u32;
+    // SAFETY: every handle is a live process handle owned by a `Child` in
+    // `children`, which outlives this call; the count is within the wait
+    // limit, and the wait only observes the handles without modifying them.
+    let status =
+        unsafe { WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, millis) };
+    if status == WAIT_FAILED {
+        std::thread::sleep(timeout);
+    }
 }
 /// Reads only what a pipe already holds, so draining a failed command's stdout never
 /// waits for a writer that is still alive.
@@ -240,10 +280,11 @@ fn windows_statuses(
     signals: &Signals,
     last_status: &mut Option<i32>,
     started: Instant,
-) -> Result<()> {
+) -> Result<bool> {
     children.check_bridge_error()?;
+    let mut stderr_busy = false;
     for (index, managed) in children.0.iter_mut().enumerate() {
-        drain_diagnostic(managed, signals)?;
+        stderr_busy |= drain_diagnostic(managed, signals)?;
         if !managed.reaped {
             if let Some(status) = managed.child.try_wait()? {
                 managed.reaped = true;
@@ -341,7 +382,7 @@ fn windows_statuses(
             }
         }
     }
-    Ok(())
+    Ok(stderr_busy)
 }
 fn execute_group_with_sink(
     request: GroupRequest<'_>,
@@ -739,7 +780,7 @@ fn execute_group_with_sink(
         loop {
             check_native_abort(calls, &children, &observed_stages, signals)
                 .map_err(|error| attach_abort_stdout(error, &output))?;
-            windows_statuses(
+            let stderr_busy = windows_statuses(
                 &mut children,
                 calls,
                 &mut observed_stages,
@@ -892,9 +933,14 @@ fn execute_group_with_sink(
                     stages: collect_native_stages(calls, &observed_stages, &children, signals),
                 });
             }
-            // `available` avoids blocking on an empty pipe. Pipe readiness is
-            // picked up within this bounded 10 Hz fallback interval.
-            std::thread::sleep(Duration::from_millis(100));
+            // Block on the children's process handles for at most one slice:
+            // a child exit wakes the loop at once, and stdout, stderr and
+            // cancellation are re-polled each slice. A stderr drain that used
+            // its whole read budget loops straight back, so a flooding child
+            // drains at pipe speed while the loop still yields each pass.
+            if !stderr_busy {
+                wait_for_supervision_event(&children, signals);
+            }
         }
     })();
     // Kill jobs before joining a potentially blocked stdin writer. All inherited

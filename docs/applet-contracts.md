@@ -1068,7 +1068,9 @@ conflict rather than losing that edit.
   valid) and
   `state` of `"present"` (the default) or `"absent"`. Matching ignores a trailing
   CR, and other bytes are kept exactly. A missing file is created only for
-  `present`. It returns `changed` and `path`.
+  `present`. It returns `changed` and `path`. With `preview` set to true it writes
+  nothing and also returns `preview` and `diff`, a unified diff of the change it
+  would make (empty when there is none).
 - `conf.set` takes `path`, `key`, `value` (one line, no CR, LF or NUL) and the
   optional style fields `separator` (`"="` by default, `":"` or `" "`), `comment`
   (`"#"` by default, `";"`, `"//"` or `"--"`), `spaced` (write `key = value` when

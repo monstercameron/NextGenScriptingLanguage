@@ -21,6 +21,10 @@
         "absent"
       ],
       "description": "Desired line state: present to add the line if missing, or absent to remove it; omitted means present."
+    },
+    "preview": {
+      "type": "boolean",
+      "description": "Report the change as a unified diff without writing anything. Omitted or false applies the change."
     }
   },
   "arguments": [
@@ -48,6 +52,12 @@
           "type": "boolean"
         },
         "path": {
+          "type": "text"
+        },
+        "preview": {
+          "type": "boolean"
+        },
+        "diff": {
           "type": "text"
         }
       },
@@ -89,6 +99,12 @@
             ]
           },
           "delivery": "single"
+        },
+        "preview": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
         }
       },
       "outputs": {
@@ -100,6 +116,12 @@
                 "type": "boolean"
               },
               "path": {
+                "type": "text"
+              },
+              "preview": {
+                "type": "boolean"
+              },
+              "diff": {
                 "type": "text"
               }
             },

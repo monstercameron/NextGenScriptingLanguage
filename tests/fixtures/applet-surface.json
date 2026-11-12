@@ -163,6 +163,7 @@
   "fs.ensure_line": {
     "line": "string",
     "path": "path",
+    "preview": "boolean",
     "state": "string"
   },
   "fs.ensure_symlink": {

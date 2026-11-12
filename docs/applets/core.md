@@ -945,6 +945,7 @@ Phrases: "fs ensure_line"
 | `path` | path | yes | Text file path to update; relative paths resolve from the program working directory. |
 | `line` | string | yes | Single line of text to add or remove; carriage returns and line feeds are not allowed. |
 | `state` | string, one of `present`, `absent` | no | Desired line state: present to add the line if missing, or absent to remove it; omitted means present. |
+| `preview` | boolean | no | Report the change as a unified diff without writing anything. Omitted or false applies the change. |
 
 Example:
 
